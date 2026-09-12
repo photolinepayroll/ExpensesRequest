@@ -233,3 +233,54 @@ function wireAdminActions_(panel, requestId, nextAction) {
   advanceBtn.addEventListener('click', function () { process(nextAction.targetStage, advanceBtn); });
   rejectBtn.addEventListener('click', function () { process('Rejected', rejectBtn); });
 }
+
+// CSV field escaping: quote-wraps any field containing a comma, quote, or
+// newline, doubling embedded quotes — Remarks/Description are free text an
+// employee/approver typed, so this must handle arbitrary content safely.
+function csvField_(value) {
+  var str = value == null ? '' : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+var EXPORT_CSV_HEADERS = [
+  'RequestID', 'EmployeeID', 'EmployeeName', 'Status', 'SubmittedDate',
+  'ApprovedBy', 'ApprovedDate', 'ReviewedBy', 'ReviewedDate',
+  'AuthorizedBy', 'AuthorizedDate', 'CreditingDate',
+  'LineDate', 'Category', 'Amount', 'BaseLocation', 'ReceiptURL', 'Remarks'
+];
+
+// One row per line item (not per request) — a request with 3 lines produces
+// 3 CSV rows, each repeating the request-level columns.
+function buildExportCsv_(requests) {
+  var rows = [EXPORT_CSV_HEADERS.map(csvField_).join(',')];
+  requests.forEach(function (req) {
+    var statusLabel = STATUS_DISPLAY_LABELS[req.Status] || req.Status;
+    (req.lines || []).forEach(function (line) {
+      rows.push([
+        req.RequestID, req.EmployeeID, req.EmployeeName, statusLabel, req.DateSubmitted,
+        req.ApprovedBy, req.ApprovedDate, req.ReviewedBy, req.ReviewedDate,
+        req.AuthorizedBy, req.AuthorizedDate, req.CreditingDate,
+        line.Date, line.Category, line.Amount, line.BaseLocation, line.ReceiptFileURL, req.Remarks
+      ].map(csvField_).join(','));
+    });
+  });
+  return rows.join('\r\n');
+}
+
+// Triggers a browser download of a text Blob — jsPDF has no CSV equivalent
+// (Task 5 uses doc.save() for the PDF instead), so this is the one place
+// this app needs the manual Blob + temporary <a download> pattern.
+function downloadTextFile_(filename, mimeType, text) {
+  var blob = new Blob([text], { type: mimeType });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
