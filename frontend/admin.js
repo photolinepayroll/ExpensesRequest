@@ -284,3 +284,96 @@ function downloadTextFile_(filename, mimeType, text) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// Landscape A4 gives 277mm of usable width (297 - 2x10 margin) — needed to
+// fit all 8 summary columns without wrapping/truncating too aggressively.
+var EXPORT_PDF_MARGIN = 10;
+var EXPORT_PDF_ROW_HEIGHT = 7;
+var EXPORT_SUMMARY_COLUMNS = [
+  { key: 'RequestID', label: 'Request ID', width: 22 },
+  { key: 'EmployeeName', label: 'Employee', width: 40 },
+  { key: 'StatusLabel', label: 'Status', width: 22 },
+  { key: 'TotalAmount', label: 'Total', width: 20 },
+  { key: 'ApprovedBy', label: 'Approved By', width: 30 },
+  { key: 'ApprovedDate', label: 'Approved Date', width: 20 },
+  { key: 'ReviewedBy', label: 'Reviewed By', width: 30 },
+  { key: 'ReviewedDate', label: 'Reviewed Date', width: 20 },
+  { key: 'AuthorizedBy', label: 'Authorized By', width: 30 },
+  { key: 'AuthorizedDate', label: 'Authorized Date', width: 20 },
+  { key: 'CreditingDate', label: 'Crediting Date', width: 23 }
+];
+
+// Shrinks text with a trailing ellipsis until it fits maxWidth at the PDF's
+// current font/size — jsPDF has no built-in cell-truncation helper.
+function truncateToWidth_(doc, text, maxWidth) {
+  var str = String(text == null ? '' : text);
+  if (doc.getTextWidth(str) <= maxWidth) return str;
+  while (str.length > 1 && doc.getTextWidth(str + '…') > maxWidth) {
+    str = str.slice(0, -1);
+  }
+  return str + '…';
+}
+
+function formatDateForExport_(value) {
+  if (!value) return '';
+  var d = new Date(value);
+  return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString();
+}
+
+function drawSummaryTableHeader_(doc, y) {
+  var x = EXPORT_PDF_MARGIN;
+  doc.setFont(undefined, 'bold');
+  doc.setFontSize(8);
+  EXPORT_SUMMARY_COLUMNS.forEach(function (col) {
+    doc.text(truncateToWidth_(doc, col.label, col.width - 2), x + 1, y);
+    x += col.width;
+  });
+  doc.setFont(undefined, 'normal');
+  return y + EXPORT_PDF_ROW_HEIGHT;
+}
+
+// Draws the page-1(+overflow) summary table, one row per request, adding new
+// pages as needed and repeating the header row on each. Returns the y
+// position after the table so the caller can append the missing-receipts
+// note below it if there's room, or on a fresh page.
+function drawSummaryTable_(doc, requests) {
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var bottomLimit = pageHeight - EXPORT_PDF_MARGIN;
+  var y = EXPORT_PDF_MARGIN;
+
+  doc.setFontSize(14);
+  doc.setFont(undefined, 'bold');
+  doc.text('Liquidation Requests Export — Reviewed / Disbursed', EXPORT_PDF_MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  y += 8;
+
+  y = drawSummaryTableHeader_(doc, y);
+
+  doc.setFontSize(8);
+  requests.forEach(function (req) {
+    if (y > bottomLimit) {
+      doc.addPage();
+      y = EXPORT_PDF_MARGIN;
+      y = drawSummaryTableHeader_(doc, y);
+      doc.setFontSize(8);
+    }
+    var row = {
+      RequestID: req.RequestID,
+      EmployeeName: req.EmployeeName,
+      StatusLabel: STATUS_DISPLAY_LABELS[req.Status] || req.Status,
+      TotalAmount: formatCurrency(req.TotalAmount),
+      ApprovedBy: req.ApprovedBy, ApprovedDate: formatDateForExport_(req.ApprovedDate),
+      ReviewedBy: req.ReviewedBy, ReviewedDate: formatDateForExport_(req.ReviewedDate),
+      AuthorizedBy: req.AuthorizedBy, AuthorizedDate: formatDateForExport_(req.AuthorizedDate),
+      CreditingDate: formatDateForExport_(req.CreditingDate)
+    };
+    var x = EXPORT_PDF_MARGIN;
+    EXPORT_SUMMARY_COLUMNS.forEach(function (col) {
+      doc.text(truncateToWidth_(doc, row[col.key], col.width - 2), x + 1, y);
+      x += col.width;
+    });
+    y += EXPORT_PDF_ROW_HEIGHT;
+  });
+
+  return y;
+}
