@@ -270,9 +270,10 @@ function buildExportCsv_(requests) {
   return rows.join('\r\n');
 }
 
-// Triggers a browser download of a text Blob — jsPDF has no CSV equivalent
-// (Task 5 uses doc.save() for the PDF instead), so this is the one place
-// this app needs the manual Blob + temporary <a download> pattern.
+// Triggers a browser download of a text Blob — the print-preview report
+// (buildExportReportHtml_) uses window.open()/document.write() instead,
+// so this is the one place this app needs the manual Blob + temporary
+// <a download> pattern.
 function downloadTextFile_(filename, mimeType, text) {
   var blob = new Blob([text], { type: mimeType });
   var url = URL.createObjectURL(blob);
@@ -283,5 +284,139 @@ function downloadTextFile_(filename, mimeType, text) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function formatDateForExport_(value) {
+  if (!value) return '';
+  var d = new Date(value);
+  return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString();
+}
+
+// Builds the print-preview report as a single HTML string: a summary table
+// followed by one full-page receipt image per line item, then a trailing
+// note listing any line with no ReceiptFileURL. Uses driveThumbnailUrl_
+// (already defined in common.js, proven by the on-screen receipt modal) so
+// each receipt is a plain cross-origin <img> — no canvas involved, so no
+// backend byte-fetching action is needed the way jsPDF's addImage required.
+function buildExportReportHtml_(requests) {
+  var now = new Date().toLocaleDateString();
+
+  var summaryRows = requests.map(function (req) {
+    return '<tr>' +
+      '<td>' + escapeHtml_(req.RequestID) + '</td>' +
+      '<td>' + escapeHtml_(req.EmployeeName) + '</td>' +
+      '<td>' + escapeHtml_(STATUS_DISPLAY_LABELS[req.Status] || req.Status) + '</td>' +
+      '<td>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
+      '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.ApprovedDate)) + '</td>' +
+      '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.ReviewedDate)) + '</td>' +
+      '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.AuthorizedDate)) + '</td>' +
+      '<td>' + escapeHtml_(formatDateForExport_(req.CreditingDate)) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var missing = [];
+  var receiptPages = [];
+  requests.forEach(function (req) {
+    (req.lines || []).forEach(function (line) {
+      if (!line.ReceiptFileURL) {
+        missing.push(req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+          formatDateForExport_(line.Date) + ' — ' + line.Category + ' (No receipt on file)');
+        return;
+      }
+      var caption = req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+        formatDateForExport_(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount);
+      receiptPages.push(
+        '<div class="receipt-page">' +
+        '<p class="receipt-caption">' + escapeHtml_(caption) + '</p>' +
+        '<img src="' + escapeHtml_(driveThumbnailUrl_(line.ReceiptFileURL)) + '" alt="Receipt">' +
+        '</div>'
+      );
+    });
+  });
+
+  var missingHtml = missing.length
+    ? '<div class="missing-note"><h2>Lines with no receipt on file</h2><ul>' +
+      missing.map(function (m) { return '<li>' + escapeHtml_(m) + '</li>'; }).join('') +
+      '</ul></div>'
+    : '';
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+    '<title>Liquidation Export — ' + escapeHtml_(now) + '</title>' +
+    '<style>' +
+    '* { box-sizing: border-box; }' +
+    'body { font-family: Arial, sans-serif; margin: 16px; color: #1e293b; }' +
+    'h1 { color: #1e3a5f; font-size: 18px; margin-bottom: 4px; }' +
+    'p.subtitle { color: #64748b; font-size: 12px; margin-top: 0; margin-bottom: 16px; }' +
+    'table { width: 100%; border-collapse: collapse; font-size: 11px; }' +
+    'th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }' +
+    'th { background: #1e3a5f; color: #fff; }' +
+    '.receipt-page { page-break-before: always; padding-top: 16px; }' +
+    '.receipt-caption { font-weight: bold; font-size: 13px; margin-bottom: 8px; }' +
+    '.receipt-page img { max-width: 100%; max-height: 90vh; display: block; margin: 0 auto; }' +
+    '.missing-note { page-break-before: always; padding-top: 16px; }' +
+    '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
+    '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
+    '.no-print button { padding: 10px 18px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }' +
+    '.btn-print { background: #1e3a5f; color: #fff; }' +
+    '.btn-close { background: #64748b; color: #fff; }' +
+    '@media print { .no-print { display: none !important; } }' +
+    '</style></head><body>' +
+    '<div class="no-print">' +
+    '<button class="btn-print" onclick="window.print()">Print / Save PDF</button>' +
+    '<button class="btn-close" onclick="window.close()">Close</button>' +
+    '</div>' +
+    '<h1>Liquidation Requests Export — Reviewed / Disbursed</h1>' +
+    '<p class="subtitle">Generated ' + escapeHtml_(now) + '</p>' +
+    '<table><thead><tr>' +
+    '<th>Request ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
+    '<th>Approved</th><th>Reviewed</th><th>Authorized</th><th>Crediting Date</th>' +
+    '</tr></thead><tbody>' + summaryRows + '</tbody></table>' +
+    receiptPages.join('') +
+    missingHtml +
+    '</body></html>';
+}
+
+function initExportButton_() {
+  $('btn-export').addEventListener('click', handleExportClick_);
+}
+
+function handleExportClick_() {
+  var btn = $('btn-export');
+  var errorEl = $('export-error');
+  clearMessage(errorEl);
+  var originalLabel = btn.querySelector('span').textContent;
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Exporting...';
+
+  Promise.all([
+    runServer('getAllRequestsForPayroll', 'Reviewed'),
+    runServer('getAllRequestsForPayroll', 'Authorized')
+  ]).then(function (results) {
+    if (!Array.isArray(results[0]) || !Array.isArray(results[1])) {
+      var failed = !Array.isArray(results[0]) ? results[0] : results[1];
+      throw new Error(failed && failed.error ? failed.error : 'Failed to load requests.');
+    }
+    var requests = results[0].concat(results[1]);
+    if (!requests.length) {
+      setMessage(errorEl, 'No Reviewed or Disbursed requests to export.', true);
+      return;
+    }
+
+    var dateStamp = new Date().toISOString().slice(0, 10);
+    downloadTextFile_('liquidation-export-' + dateStamp + '.csv', 'text/csv', buildExportCsv_(requests));
+
+    var reportWindow = window.open('', '_blank');
+    if (!reportWindow) {
+      setMessage(errorEl, 'Please allow popups for this site to view the printable report.', true);
+      return;
+    }
+    reportWindow.document.write(buildExportReportHtml_(requests));
+    reportWindow.document.close();
+  }).catch(function (err) {
+    setMessage(errorEl, 'Export failed: ' + err.message, true);
+  }).finally(function () {
+    btn.disabled = false;
+    btn.querySelector('span').textContent = originalLabel;
+  });
 }
 
