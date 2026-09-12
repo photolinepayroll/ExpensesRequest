@@ -1,5 +1,8 @@
 name: Deploy frontend to GitHub Pages
 
+# Re-triggers the deploy after switching the repo's Pages source to
+# "GitHub Actions" in Settings — that switch alone doesn't republish.
+
 on:
   push:
     branches: [main]
