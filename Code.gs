@@ -17,8 +17,7 @@ var API_ACTIONS = {
   updateLineItemAmount: updateLineItemAmount,
   loginApprover: loginApprover,
   searchEmployeesForUtility: searchEmployeesForUtility,
-  saveMealAllowanceRecord: saveMealAllowanceRecord,
-  getReceiptImageBase64: getReceiptImageBase64
+  saveMealAllowanceRecord: saveMealAllowanceRecord
 };
 
 function doGet(e) {
