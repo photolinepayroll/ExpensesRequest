@@ -76,7 +76,8 @@ function saveMealAllowanceRecord(payload) {
     City: payload.city || '',
     Town: payload.town || '',
     AreaRegion: payload.areaRegion || '',
-    AllowanceSource: payload.allowanceSource || ''
+    AllowanceSource: payload.allowanceSource || '',
+    EndGpsMapLink: payload.endGpsMapLink || ''
   });
 
   return { success: true, recordId: recordId };

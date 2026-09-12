@@ -153,13 +153,51 @@ function resolveEmployeeCategory_(rows, employeeId, department) {
   return { category: 'Staff', store: null };
 }
 
+// The store-directory sheet (STORE_DIRECTORY_CSV_URL, used by
+// resolveEmployeeCategory_ above) and the store-coordinates sheet
+// (STORE_COORDINATES_CSV_URL, used by the Meal Allowance utility) are two
+// independently-maintained published sheets that can disagree on which
+// store is a Tech/Area Head's actual home branch — confirmed via real data
+// (BIO 373 shown as Area Head of "Harbor Point" in the directory sheet, but
+// the coordinates sheet marks their SM Tarlac row with the literal text
+// "MOTHER BRANCH", meaning Harbor Point is just a store they cover, not
+// home). The coordinates sheet's literal marker is authoritative for this
+// display since it's the same one the Meal Allowance amount logic already
+// treats as authoritative (see meal-allowance.js's maResolveRegularAllowance_).
+function resolveMotherBranchFromCoordinates_(rows, employeeId) {
+  var id = String(employeeId || '').trim().toLowerCase();
+  var match = rows.filter(function (r) {
+    var techBioId = String(r['BIO ID'] || '').trim().toLowerCase();
+    var areaHeadBioId = String(r['BIO'] || '').trim().toLowerCase();
+    if (techBioId && id === techBioId && /mother\s*branch/i.test(r['Meal Allowance'] || '')) return true;
+    if (areaHeadBioId && id === areaHeadBioId && /mother\s*branch/i.test(r['Meal Alowance'] || '')) return true;
+    return false;
+  })[0];
+  return match ? match['Store'] : null;
+}
+
+function loadStoreCoordinatesForMotherBranch_() {
+  return fetch(STORE_COORDINATES_CSV_URL)
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    })
+    .then(function (text) { return parseStoreCoordinatesCsv_(text); })
+    .catch(function () { return null; }); // non-fatal — falls back to the directory sheet's store below
+}
+
 function applyEmployeeCategory_() {
   hideEl($('tab-utilities')); // fail closed until resolved
 
-  loadStoreDirectory_()
-    .then(function (rows) {
+  Promise.all([loadStoreDirectory_(), loadStoreCoordinatesForMotherBranch_()])
+    .then(function (results) {
+      var rows = results[0];
+      var coordinateRows = results[1];
       var result = resolveEmployeeCategory_(rows, currentEmployee.EmployeeID, currentEmployee.Department);
-      var motherBranch = result.store || currentEmployee.BaseLocation || '';
+      var markedMotherBranch = coordinateRows
+        ? resolveMotherBranchFromCoordinates_(coordinateRows, currentEmployee.EmployeeID)
+        : null;
+      var motherBranch = markedMotherBranch || result.store || currentEmployee.BaseLocation || '';
       $('employee-mother-branch').textContent = motherBranch ? 'Mother Branch: ' + motherBranch : '';
 
       if (result.category === 'AreaHead' || result.category === 'Technical' ||

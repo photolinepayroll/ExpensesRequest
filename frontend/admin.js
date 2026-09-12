@@ -309,7 +309,8 @@ function buildExportReportHtml_(requests) {
   }).join('');
 
   var missing = [];
-  var receiptPages = [];
+  var fareItems = [];
+  var mealItems = [];
   requests.forEach(function (req) {
     (req.lines || []).forEach(function (line) {
       if (!line.ReceiptFileURL) {
@@ -317,16 +318,41 @@ function buildExportReportHtml_(requests) {
           formatDateDisplay(line.Date) + ' — ' + line.Category + ' (No receipt on file)');
         return;
       }
-      var caption = req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-        formatDateDisplay(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount);
-      receiptPages.push(
-        '<div class="receipt-page">' +
-        '<p class="receipt-caption">' + escapeHtml_(caption) + '</p>' +
-        '<img src="' + escapeHtml_(driveThumbnailUrl_(line.ReceiptFileURL)) + '" alt="Receipt">' +
-        '</div>'
-      );
+      var item = {
+        caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+          formatDateDisplay(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount),
+        url: driveThumbnailUrl_(line.ReceiptFileURL)
+      };
+      (line.Category === 'Meal Allowance' ? mealItems : fareItems).push(item);
     });
   });
+
+  function chunk_(arr, size) {
+    var out = [];
+    for (var i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  }
+
+  function receiptCellHtml_(item) {
+    return '<div class="receipt-cell">' +
+      '<p class="receipt-caption">' + escapeHtml_(item.caption) + '</p>' +
+      '<img src="' + escapeHtml_(item.url) + '" alt="Receipt">' +
+      '</div>';
+  }
+
+  // Fare/Accommodation receipts get 2 per page (stacked, legible full-size
+  // images); Meal Allowance receipts get 6 per page (2x3 grid) since there
+  // are usually many more of them and they only need to be verifiable, not
+  // as large. A partial final group (odd count) is handled purely by CSS —
+  // see the .receipt-page-2up/-6up rules below — no placeholder markup
+  // needed here.
+  var receiptPagesHtml =
+    chunk_(fareItems, 2).map(function (g) {
+      return '<div class="receipt-page receipt-page-2up">' + g.map(receiptCellHtml_).join('') + '</div>';
+    }).join('') +
+    chunk_(mealItems, 6).map(function (g) {
+      return '<div class="receipt-page receipt-page-6up">' + g.map(receiptCellHtml_).join('') + '</div>';
+    }).join('');
 
   var missingHtml = missing.length
     ? '<div class="missing-note"><h2>Lines with no receipt on file</h2><ul>' +
@@ -344,9 +370,16 @@ function buildExportReportHtml_(requests) {
     'table { width: 100%; border-collapse: collapse; font-size: 11px; }' +
     'th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }' +
     'th { background: #1e3a5f; color: #fff; }' +
-    '.receipt-page { page-break-before: always; padding-top: 16px; }' +
-    '.receipt-caption { font-weight: bold; font-size: 13px; margin-bottom: 8px; }' +
-    '.receipt-page img { max-width: 100%; max-height: 90vh; display: block; margin: 0 auto; }' +
+    '@page { size: letter portrait; margin: 12mm; }' +
+    '.receipt-page { page-break-before: always; padding-top: 8px; min-height: 90vh; }' +
+    '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 4px; }' +
+    '.receipt-page-2up { display: flex; flex-direction: column; gap: 12px; height: 100%; }' +
+    '.receipt-page-2up .receipt-cell { flex: 1 1 50%; display: flex; flex-direction: column; min-height: 0; }' +
+    '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
+    '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); gap: 10px; height: 100%; }' +
+    '.receipt-page-6up .receipt-cell { display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; }' +
+    '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 3px; }' +
+    '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +
     '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
     '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
@@ -365,37 +398,18 @@ function buildExportReportHtml_(requests) {
     '<th>Request ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
     '<th>Approved</th><th>Reviewed</th><th>Authorized</th><th>Crediting Date</th>' +
     '</tr></thead><tbody>' + summaryRows + '</tbody></table>' +
-    receiptPages.join('') +
+    receiptPagesHtml +
     missingHtml +
     '</body></html>';
 }
 
-function initExportButton_() {
-  $('btn-export').addEventListener('click', handleExportClick_);
+function initExportButtons_() {
+  $('btn-export-csv').addEventListener('click', handleExportCsvClick_);
+  $('btn-export-report').addEventListener('click', handleExportReportClick_);
 }
 
-function handleExportClick_() {
-  var btn = $('btn-export');
-  var errorEl = $('export-error');
-  clearMessage(errorEl);
-  var originalLabel = btn.querySelector('span').textContent;
-  btn.disabled = true;
-  btn.querySelector('span').textContent = 'Exporting...';
-
-  // window.open must happen synchronously, right here in the click handler,
-  // before any await/.then() — browsers (Safari especially) only honor the
-  // "user activation" window open request during synchronous execution of
-  // the click handler. Opening it after the Promise.all round-trip below
-  // gets silently blocked even when the user never configured a popup
-  // blocker. A placeholder is written immediately and swapped for the real
-  // report once the data resolves.
-  var reportWindow = window.open('', '_blank');
-  if (reportWindow) {
-    reportWindow.document.write('<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px;color:#64748b">Loading export…</body></html>');
-    reportWindow.document.close();
-  }
-
-  Promise.all([
+function fetchExportableRequests_() {
+  return Promise.all([
     runServer('getAllRequestsForPayroll', 'Reviewed'),
     runServer('getAllRequestsForPayroll', 'Authorized')
   ]).then(function (results) {
@@ -403,16 +417,60 @@ function handleExportClick_() {
       var failed = !Array.isArray(results[0]) ? results[0] : results[1];
       throw new Error(failed && failed.error ? failed.error : 'Failed to load requests.');
     }
-    var requests = results[0].concat(results[1]);
+    return results[0].concat(results[1]);
+  });
+}
+
+function handleExportCsvClick_() {
+  var btn = $('btn-export-csv');
+  var errorEl = $('export-error');
+  clearMessage(errorEl);
+  var originalLabel = btn.querySelector('span').textContent;
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Exporting...';
+
+  fetchExportableRequests_().then(function (requests) {
+    if (!requests.length) {
+      setMessage(errorEl, 'No Reviewed or Disbursed requests to export.', true);
+      return;
+    }
+    var dateStamp = new Date().toISOString().slice(0, 10);
+    downloadTextFile_('liquidation-export-' + dateStamp + '.csv', 'text/csv', buildExportCsv_(requests));
+  }).catch(function (err) {
+    setMessage(errorEl, 'Export failed: ' + err.message, true);
+  }).finally(function () {
+    btn.disabled = false;
+    btn.querySelector('span').textContent = originalLabel;
+  });
+}
+
+function handleExportReportClick_() {
+  var btn = $('btn-export-report');
+  var errorEl = $('export-error');
+  clearMessage(errorEl);
+  var originalLabel = btn.querySelector('span').textContent;
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Loading...';
+
+  // window.open must happen synchronously, right here in the click handler,
+  // before any await/.then() — browsers (Safari especially) only honor the
+  // "user activation" window open request during synchronous execution of
+  // the click handler. Opening it after the fetch round-trip below gets
+  // silently blocked even when the user never configured a popup blocker.
+  // A placeholder is written immediately and swapped for the real report
+  // once the data resolves.
+  var reportWindow = window.open('', '_blank');
+  if (reportWindow) {
+    reportWindow.document.write('<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px;color:#64748b">Loading export…</body></html>');
+    reportWindow.document.close();
+  }
+
+  fetchExportableRequests_().then(function (requests) {
     if (!requests.length) {
       if (reportWindow) reportWindow.close();
       setMessage(errorEl, 'No Reviewed or Disbursed requests to export.', true);
       return;
     }
-
-    var dateStamp = new Date().toISOString().slice(0, 10);
-    downloadTextFile_('liquidation-export-' + dateStamp + '.csv', 'text/csv', buildExportCsv_(requests));
-
     if (!reportWindow) {
       setMessage(errorEl, 'Please allow popups for this site to view the printable report.', true);
       return;
@@ -421,6 +479,7 @@ function handleExportClick_() {
     reportWindow.document.write(buildExportReportHtml_(requests));
     reportWindow.document.close();
   }).catch(function (err) {
+    if (reportWindow) reportWindow.close();
     setMessage(errorEl, 'Export failed: ' + err.message, true);
   }).finally(function () {
     btn.disabled = false;

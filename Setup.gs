@@ -31,7 +31,7 @@ function setupSheets() {
   createOrMigrateSheet_(ss, SHEET_MEAL_ALLOWANCES,
     ['RecordID', 'EmployeeID', 'EmployeeName', 'DutyDate', 'StartIn', 'EndOut', 'DutyHours',
      'RegularMealAllowance', 'MidnightAllowance', 'TotalAllowance', 'SubmittedDate', 'PhotoLink',
-     'MatchedStore', 'City', 'Town', 'AreaRegion', 'AllowanceSource']);
+     'MatchedStore', 'City', 'Town', 'AreaRegion', 'AllowanceSource', 'EndGpsMapLink']);
 
   // Remove the default "Sheet1" if it's still empty and unused.
   var defaultSheet = ss.getSheetByName('Sheet1');

@@ -271,6 +271,37 @@ function csvToObjects_(rows) {
     });
 }
 
+// STORE_COORDINATES_CSV_URL's real header row (confirmed via a live fetch)
+// has three duplicate column names — "Store", "BIO ID", and
+// "REGULAR (AUDIT/TEC/STAFF)" all appear twice: once for the per-store
+// data near the front of the row, and again at columns 21/22 for an
+// unrelated "Technical Staff Roster" sub-table (BIO ID -> employee name)
+// crammed into the same published sheet. csvToObjects_ keys by header
+// name, so the later roster occurrence silently overwrote the real
+// per-store "BIO ID"/"REGULAR (AUDIT/TEC/STAFF)" values for every row —
+// this broke the plain regional-bracket Meal Allowance amount entirely
+// (it always computed to ₱0, confirmed live for a plain Staff employee)
+// and any BIO ID membership match. This restores those two fields by
+// fixed column index — re-verify these indices if the sheet's layout
+// ever changes; "Store" also duplicates (columns 0 and 10) but both
+// copies hold the same value in practice, so it's left as-is.
+var STORE_COORD_COL_REGULAR_BRACKET = 2;
+var STORE_COORD_COL_TECH_BIO = 3;
+
+function parseStoreCoordinatesCsv_(text) {
+  var rows = parseCsv_(text);
+  var headers = rows[0];
+  return rows.slice(1)
+    .filter(function (r) { return r.length > 1 || (r[0] && r[0].trim() !== ''); })
+    .map(function (r) {
+      var obj = {};
+      headers.forEach(function (h, i) { obj[h] = r[i] !== undefined ? r[i] : ''; });
+      obj['REGULAR (AUDIT/TEC/STAFF)'] = r[STORE_COORD_COL_REGULAR_BRACKET] !== undefined ? r[STORE_COORD_COL_REGULAR_BRACKET] : '';
+      obj['BIO ID'] = r[STORE_COORD_COL_TECH_BIO] !== undefined ? r[STORE_COORD_COL_TECH_BIO] : '';
+      return obj;
+    });
+}
+
 function readFileAsBase64(file) {
   return new Promise(function (resolve, reject) {
     var reader = new FileReader();
@@ -378,6 +409,7 @@ function wireImageZoomPan_(img, pane) {
   var dragStartY = 0;
   var dragStartTranslateX = 0;
   var dragStartTranslateY = 0;
+  var rotation = 0; // 0/90/180/270 — resets fresh every call, same as scale/translate
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -388,13 +420,21 @@ function wireImageZoomPan_(img, pane) {
     var maxOffsetY = Math.max(0, (img.offsetHeight * scale - pane.clientHeight) / 2);
     translateX = clamp(translateX, -maxOffsetX, maxOffsetX);
     translateY = clamp(translateY, -maxOffsetY, maxOffsetY);
-    img.style.transform = 'translate(' + translateX + 'px, ' + translateY + 'px) scale(' + scale + ')';
+    // rotate() stays right-most/inner-most so it spins the image around its
+    // own center without changing what "horizontal"/"vertical" mean for the
+    // translate() pan offsets above (which are screen-space pixel deltas).
+    img.style.transform = 'translate(' + translateX + 'px, ' + translateY + 'px) scale(' + scale + ') rotate(' + rotation + 'deg)';
     img.style.cursor = scale > 1 ? (dragPointerId !== null ? 'grabbing' : 'grab') : 'default';
   }
 
   function setScale(newScale) {
     scale = clamp(newScale, MIN_SCALE, MAX_SCALE);
     if (scale === MIN_SCALE) { translateX = 0; translateY = 0; }
+    applyTransform();
+  }
+
+  function rotateBy(delta) {
+    rotation = (rotation + delta + 360) % 360;
     applyTransform();
   }
 
@@ -463,21 +503,34 @@ function wireImageZoomPan_(img, pane) {
 
   img.addEventListener('pointerup', endPointer);
   img.addEventListener('pointercancel', endPointer);
+
+  return { rotateLeft: function () { rotateBy(-90); }, rotateRight: function () { rotateBy(90); } };
 }
 
-// DriveService.gs stores receipts as driveFile.getUrl(), e.g.
-// "https://drive.google.com/file/d/<ID>/view?usp=drivesdk" — that's an HTML
-// viewer page, not raw image bytes, so it can never load in an <img src>
-// (which is why the preview used to always fall through to the "Preview not
-// available" fallback). Drive's thumbnail endpoint serves an actual image
-// for that same file ID — and generates a page-1 preview image even for a
-// PDF receipt, which is exactly what we want here. Only rewrites URLs that
-// match this specific Drive pattern; anything else (e.g. the Meal Allowance
-// utility's attendance-photo URL, a different host/shape) passes through
-// unchanged, still used directly as the <img src>, same as before.
+// Drive URLs seen in this app come in two shapes: ".../file/d/<ID>/view..."
+// (this app's own uploaded receipts, via DriveService.gs's uploadReceiptFile_
+// -> driveFile.getUrl()) and ".../uc?id=<ID>" (the Meal Allowance utility's
+// attendance "Photo Link" column — confirmed by inspecting the real
+// published CSV). Neither serves raw image bytes directly — the first is an
+// HTML viewer page, the second a redirect — so neither loads in an <img src>
+// as-is (which is why receipt previews used to fall through to "Preview not
+// available"). Both get rewritten below to Drive's thumbnail/download
+// endpoints, which do serve real bytes for the same file ID.
+function driveFileId_(url) {
+  var s = String(url || '');
+  var m = /\/file\/d\/([^/?#]+)/.exec(s);
+  if (m) return m[1];
+  m = /[?&]id=([^&#]+)/.exec(s);
+  return m ? m[1] : null;
+}
+
+// Drive's thumbnail endpoint serves an actual image for a given file ID —
+// and generates a page-1 preview image even for a PDF receipt, which is
+// exactly what we want here. Anything whose file ID can't be extracted
+// passes through unchanged, still used directly as the <img src>.
 function driveThumbnailUrl_(url) {
-  var match = /\/file\/d\/([^/]+)/.exec(url || '');
-  return match ? 'https://drive.google.com/thumbnail?id=' + match[1] + '&sz=w2000' : url;
+  var id = driveFileId_(url);
+  return id ? 'https://drive.google.com/thumbnail?id=' + id + '&sz=w2000' : url;
 }
 
 // The thumbnail above is a downscaled/compressed preview (capped at
@@ -485,12 +538,17 @@ function driveThumbnailUrl_(url) {
 // fine print at full quality. This gives access to the original,
 // full-resolution file straight from Drive for that case.
 function driveDownloadUrl_(url) {
-  var match = /\/file\/d\/([^/]+)/.exec(url || '');
-  return match ? 'https://drive.google.com/uc?export=download&id=' + match[1] : url;
+  var id = driveFileId_(url);
+  return id ? 'https://drive.google.com/uc?export=download&id=' + id : url;
 }
 
 var ICON_DOWNLOAD =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+
+var ICON_ROTATE_LEFT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><polyline points="3 4 3 9 8 9"></polyline></svg>';
+var ICON_ROTATE_RIGHT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><polyline points="21 4 21 9 16 9"></polyline></svg>';
 
 function openLineItemPreview_(line, options) {
   options = options || {};
@@ -500,8 +558,13 @@ function openLineItemPreview_(line, options) {
 
   if (line.ReceiptFileURL) {
     var downloadLinkHtml = '<a href="' + escapeHtml_(driveDownloadUrl_(line.ReceiptFileURL)) + '" class="receipt-modal-download" target="_blank" rel="noopener" title="Download original receipt" aria-label="Download original receipt">' + ICON_DOWNLOAD + '</a>';
+    var rotateControlsHtml =
+      '<div class="receipt-modal-rotate-group">' +
+      '<button type="button" class="receipt-modal-rotate-left" aria-label="Rotate left">' + ICON_ROTATE_LEFT + '</button>' +
+      '<button type="button" class="receipt-modal-rotate-right" aria-label="Rotate right">' + ICON_ROTATE_RIGHT + '</button>' +
+      '</div>';
 
-    imagePane.innerHTML = '<img src="' + escapeHtml_(driveThumbnailUrl_(line.ReceiptFileURL)) + '" alt="Receipt" draggable="false">' + downloadLinkHtml;
+    imagePane.innerHTML = '<img src="' + escapeHtml_(driveThumbnailUrl_(line.ReceiptFileURL)) + '" alt="Receipt" draggable="false">' + downloadLinkHtml + rotateControlsHtml;
     var receiptImg = imagePane.querySelector('img');
     receiptImg.addEventListener('error', function () {
       imagePane.innerHTML =
@@ -510,7 +573,9 @@ function openLineItemPreview_(line, options) {
         '<a href="' + escapeHtml_(line.ReceiptFileURL) + '" target="_blank" rel="noopener" class="link-inline">Open receipt in new tab</a>' +
         '</div>' + downloadLinkHtml;
     }, { once: true });
-    wireImageZoomPan_(receiptImg, imagePane);
+    var zoomPan = wireImageZoomPan_(receiptImg, imagePane);
+    imagePane.querySelector('.receipt-modal-rotate-left').addEventListener('click', zoomPan.rotateLeft);
+    imagePane.querySelector('.receipt-modal-rotate-right').addEventListener('click', zoomPan.rotateRight);
   } else {
     imagePane.innerHTML =
       '<div class="receipt-modal-placeholder">' + RECEIPT_PLACEHOLDER_ICON + '<p>No receipt uploaded.</p></div>';

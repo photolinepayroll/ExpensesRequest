@@ -34,6 +34,29 @@ function initMealAllowanceUtility() {
     maUpdateLoadButtonState_();
   });
 
+  $('ma-crosses-midnight').addEventListener('change', function () {
+    var checked = this.checked;
+    if (checked) {
+      showEl($('ma-end-date-row'));
+      // Default to duty date + 1 day — the common case — but still editable.
+      var dutyDateStr = $('ma-duty-date').value;
+      if (dutyDateStr) {
+        var nextDay = new Date(dutyDateStr + 'T00:00:00');
+        nextDay.setDate(nextDay.getDate() + 1);
+        $('ma-duty-end-date').value = formatDateForInput_(nextDay);
+      }
+    } else {
+      hideEl($('ma-end-date-row'));
+      $('ma-duty-end-date').value = '';
+    }
+    maResetSelectorsAndSummary_();
+    maUpdateLoadButtonState_();
+  });
+  $('ma-duty-end-date').addEventListener('change', function () {
+    maResetSelectorsAndSummary_();
+    maUpdateLoadButtonState_();
+  });
+
   $('ma-btn-load').addEventListener('click', maHandleLoadAttendance_);
   $('ma-start-in').addEventListener('change', maRecomputeSummary_);
   $('ma-end-out').addEventListener('change', maRecomputeSummary_);
@@ -57,7 +80,9 @@ function maSyncSelectedEmployee_() {
 }
 
 function maUpdateLoadButtonState_() {
-  $('ma-btn-load').disabled = !(maSelectedEmployee && $('ma-duty-date').value);
+  var crossesMidnight = $('ma-crosses-midnight').checked;
+  var hasRequiredDates = $('ma-duty-date').value && (!crossesMidnight || $('ma-duty-end-date').value);
+  $('ma-btn-load').disabled = !(maSelectedEmployee && hasRequiredDates);
 }
 
 // ---- Attendance CSV ----
@@ -85,7 +110,7 @@ function maLoadStoreCoordinates_() {
       return res.text();
     })
     .then(function (text) {
-      maStoreCache = csvToObjects_(parseCsv_(text));
+      maStoreCache = parseStoreCoordinatesCsv_(text);
       return maStoreCache;
     });
 }
@@ -149,18 +174,25 @@ function maResolveDutyLocation_(endRec) {
 // AND the End OUT GPS is within MA_ASSIGNED_OVERRIDE_RADIUS_METERS of that
 // specific store — deliberately not limited to whichever store happens to be
 // globally nearest, since an unrelated closer store shouldn't hide a real
-// match against the employee's own assigned site. Falls back to the
-// bracket amount if an override cell isn't a usable number (e.g. "MOTHER
-// BRANCH" placeholder text).
+// match against the employee's own assigned site. The sheet itself already
+// marks which one of an employee's assigned rows is their actual home
+// branch: that row's amount cell holds the literal text "MOTHER BRANCH"
+// instead of a number (confirmed via real data — e.g. BIO 373 has a normal
+// numeric rate at Harbor Point, a store they cover as Area Head, but the
+// literal "MOTHER BRANCH" text at SM Tarlac, their actual home store). Duty
+// at that specific marked row pays ₱0 (no travel away from home base); duty
+// at any other of the employee's assigned rows still pays that row's real
+// override amount (a covered branch, not home); duty matching neither
+// falls back to the generic regional bracket.
 function maResolveRegularAllowance_(endRec, regionStore) {
   var empId = String(maSelectedEmployee.EmployeeID || '').trim().toLowerCase();
   var regionAmount = Number(regionStore['REGULAR (AUDIT/TEC/STAFF)']);
   if (!isFinite(regionAmount)) regionAmount = 0;
 
-  var override = null;
+  var matched = null;
   if (maStoreCache) {
     maStoreCache.forEach(function (store) {
-      if (override) return;
+      if (matched) return;
 
       var techBioId = String(store['BIO ID'] || '').trim().toLowerCase();
       var areaHeadBioId = String(store['BIO'] || '').trim().toLowerCase();
@@ -172,17 +204,35 @@ function maResolveRegularAllowance_(endRec, regionStore) {
       var sLat = parseFloat(store['Latitude (num)']);
       var sLon = parseFloat(store['Longitude (num)']);
       if (!isFinite(sLat) || !isFinite(sLon)) return;
-      var dist = maHaversineMeters_(endRec.lat, endRec.lon, sLat, sLon);
-      if (dist > MA_ASSIGNED_OVERRIDE_RADIUS_METERS) return;
+      if (maHaversineMeters_(endRec.lat, endRec.lon, sLat, sLon) > MA_ASSIGNED_OVERRIDE_RADIUS_METERS) return;
 
-      var amount = Number(store[amountField]);
+      var rawAmount = String(store[amountField] || '').trim();
+      if (/mother\s*branch/i.test(rawAmount)) {
+        matched = { amount: 0, source: role === 'AssignedTech' ? 'OwnMotherBranchTech' : 'OwnMotherBranchAreaHead' };
+        return;
+      }
+
+      var amount = Number(rawAmount);
       var storeRegularAmount = Number(store['REGULAR (AUDIT/TEC/STAFF)']);
       if (!isFinite(storeRegularAmount)) storeRegularAmount = regionAmount;
-      override = { amount: isFinite(amount) ? amount : storeRegularAmount, source: role };
+      matched = { amount: isFinite(amount) ? amount : storeRegularAmount, source: role };
     });
   }
 
-  return override || { amount: regionAmount, source: 'RegularBracket' };
+  return matched || { amount: regionAmount, source: 'RegularBracket' };
+}
+
+var MA_EVENING_START_HOUR = 18; // 6:00 PM
+var MA_MIDNIGHT_WINDOW_END_HOUR = 6; // 6:00 AM the next day
+
+// Whether Midnight Allowance is even possible for this duty session — checked
+// against the End OUT time only, matching this utility's existing "End OUT is
+// authoritative" convention (see maResolveDutyLocation_'s own comment on why
+// Start IN isn't used as a signal). A same-day daytime shift never qualifies;
+// a shift ending in the evening or in the early morning does.
+function maIsInEveningToMidnightWindow_(timestamp) {
+  var h = timestamp.getHours();
+  return h >= MA_EVENING_START_HOUR || h < MA_MIDNIGHT_WINDOW_END_HOUR;
 }
 
 
@@ -205,7 +255,14 @@ function maHandleLoadAttendance_() {
   maResetSelectorsAndSummary_();
 
   var dutyDateStr = $('ma-duty-date').value;
-  if (!maSelectedEmployee || !dutyDateStr) return;
+  var crossesMidnight = $('ma-crosses-midnight').checked;
+  var endDateStr = crossesMidnight ? $('ma-duty-end-date').value : '';
+  if (!maSelectedEmployee || !dutyDateStr || (crossesMidnight && !endDateStr)) return;
+
+  if (crossesMidnight && endDateStr <= dutyDateStr) {
+    setMessage($('ma-attendance-error'), 'Next Day Date must be after Duty Date.', true);
+    return;
+  }
 
   var btn = $('ma-btn-load');
   var originalLabel = btn.textContent;
@@ -229,7 +286,8 @@ function maHandleLoadAttendance_() {
 
         var ts = maParseTimestamp_(r['Timestamp']);
         if (!ts) return false;
-        return formatDateForInput_(ts) === dutyDateStr;
+        var recDateStr = formatDateForInput_(ts);
+        return recDateStr === dutyDateStr || (crossesMidnight && recDateStr === endDateStr);
       }).map(function (r) {
         return {
           type: String(r['Type'] || '').trim(),
@@ -317,7 +375,9 @@ function maRecomputeSummary_() {
   if (!qualifies) {
     regularRowHtml = '<div class="ma-summary-row"><span>Regular Meal Allowance (below 5 hrs)</span><strong>' + formatCurrency(0) + '</strong></div>';
   } else if (location.matched) {
-    regularRowHtml = '<div class="ma-summary-row"><span>Regular Meal Allowance</span><strong>' + formatCurrency(resolved.amount) + '</strong></div>';
+    var isOwnStore = resolved.source === 'OwnMotherBranchTech' || resolved.source === 'OwnMotherBranchAreaHead';
+    regularRowHtml = '<div class="ma-summary-row"><span>Regular Meal Allowance</span><strong>' + formatCurrency(resolved.amount) + '</strong></div>' +
+      (isOwnStore ? '<p class="muted">Duty performed at own Mother Branch — no travel allowance.</p>' : '');
   } else {
     regularRowHtml =
       '<div class="ma-summary-row"><span>Regular Meal Allowance</span>' +
@@ -325,13 +385,18 @@ function maRecomputeSummary_() {
       '<p class="muted">GPS unavailable for this record — enter the Regular Meal Allowance amount manually.</p>';
   }
 
+  var showMidnightInput = maIsInEveningToMidnightWindow_(endRec.timestamp);
+  var midnightRowHtml = showMidnightInput
+    ? '<div class="ma-summary-row"><span>Midnight Allowance</span>' +
+      '<input type="number" id="ma-midnight-manual" min="0" step="0.01" placeholder="0.00"></div>'
+    : '';
+
   var summary = $('ma-summary');
   summary.innerHTML =
     '<div class="ma-summary-row"><span>Duty Hours</span><strong>' + dutyHours.toFixed(2) + ' hrs</strong></div>' +
     locationHtml +
     regularRowHtml +
-    '<div class="ma-summary-row"><span>Midnight Allowance</span>' +
-    '<input type="number" id="ma-midnight-manual" min="0" step="0.01" placeholder="0.00"></div>' +
+    midnightRowHtml +
     '<div class="ma-summary-row ma-summary-total"><span>Total</span><span id="ma-summary-total-value">' + formatCurrency(0) + '</span></div>' +
     '<div class="ma-summary-row"><span>Photo Proof (End OUT)</span><strong>' + (endRec.photoLink ? 'Available' : 'Missing') + '</strong></div>';
   showEl(summary);
@@ -346,7 +411,8 @@ function maRecomputeSummary_() {
     } else {
       regularAmount = Number($('ma-regular-manual').value) || 0;
     }
-    var midnightAmount = Number($('ma-midnight-manual').value) || 0;
+    var midnightInputEl = $('ma-midnight-manual');
+    var midnightAmount = midnightInputEl ? (Number(midnightInputEl.value) || 0) : 0;
     var total = regularAmount + midnightAmount;
     $('ma-summary-total-value').textContent = formatCurrency(total);
 
@@ -364,13 +430,17 @@ function maRecomputeSummary_() {
       city: location.matched ? (location.store['City'] || '') : '',
       town: location.matched ? (location.store['Town'] || '') : '',
       areaRegion: location.matched ? (location.store['Area/Region'] || '') : '',
-      allowanceSource: !qualifies ? 'None' : (location.matched ? resolved.source : 'Manual')
+      allowanceSource: !qualifies ? 'None' : (location.matched ? resolved.source : 'Manual'),
+      endGpsMapLink: (isFinite(endRec.lat) && isFinite(endRec.lon))
+        ? 'https://www.google.com/maps?q=' + endRec.lat + ',' + endRec.lon
+        : ''
     };
   }
 
   var regularInput = $('ma-regular-manual');
   if (regularInput) regularInput.addEventListener('input', recalculate);
-  $('ma-midnight-manual').addEventListener('input', recalculate);
+  var midnightInput = $('ma-midnight-manual');
+  if (midnightInput) midnightInput.addEventListener('input', recalculate);
 
   recalculate();
 }
@@ -404,7 +474,8 @@ function maHandleConfirmSave_() {
     city: maLastCalculation.city,
     town: maLastCalculation.town,
     areaRegion: maLastCalculation.areaRegion,
-    allowanceSource: maLastCalculation.allowanceSource
+    allowanceSource: maLastCalculation.allowanceSource,
+    endGpsMapLink: maLastCalculation.endGpsMapLink
   })
     .then(function (result) {
       btn.disabled = false;
@@ -424,11 +495,15 @@ function maHandleConfirmSave_() {
         startDestination: maLastCalculation.startDestination,
         endDestination: maLastCalculation.endDestination,
         city: maLastCalculation.city,
-        areaRegion: maLastCalculation.areaRegion
+        areaRegion: maLastCalculation.areaRegion,
+        endGpsMapLink: maLastCalculation.endGpsMapLink
       };
 
       maResetSelectorsAndSummary_();
       $('ma-duty-date').value = '';
+      $('ma-crosses-midnight').checked = false;
+      hideEl($('ma-end-date-row'));
+      $('ma-duty-end-date').value = '';
       maUpdateLoadButtonState_();
 
       maLastSavedLineItem = savedLineItem;
@@ -469,7 +544,8 @@ function maHandleAddToNewRequest_() {
   row.querySelector('.li-amount').value = maLastSavedLineItem.total.toFixed(2);
   row.querySelector('.li-description').value =
     (maLastSavedLineItem.startDestination || 'Start') + ' → ' + (maLastSavedLineItem.endDestination || 'End') +
-    ' (' + maLastSavedLineItem.dutyHours.toFixed(2) + ' hrs)';
+    ' (' + maLastSavedLineItem.dutyHours.toFixed(2) + ' hrs)' +
+    (maLastSavedLineItem.endGpsMapLink ? ' — GPS: ' + maLastSavedLineItem.endGpsMapLink : '');
   if (hasLocation) {
     row.querySelector('.li-location').value = maLastSavedLineItem.city +
       (maLastSavedLineItem.areaRegion ? ' — ' + maLastSavedLineItem.areaRegion : '');

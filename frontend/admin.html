@@ -57,8 +57,11 @@
       <div class="card">
         <div class="card-header-row">
           <h2>Liquidation Requests</h2>
-          <button class="btn btn-secondary btn-small" id="btn-export" type="button">
-            <span>Export Reviewed/Disbursed</span>
+          <button class="btn btn-secondary btn-small" id="btn-export-csv" type="button">
+            <span>Export CSV</span>
+          </button>
+          <button class="btn btn-secondary btn-small" id="btn-export-report" type="button">
+            <span>Print Preview</span>
           </button>
         </div>
         <div class="msg msg-error hidden" id="export-error" role="alert"></div>
@@ -86,7 +89,7 @@
 
   <script>
     initAdminView();
-    initExportButton_();
+    initExportButtons_();
   </script>
 </body>
 </html>

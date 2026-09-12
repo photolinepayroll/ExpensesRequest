@@ -104,6 +104,16 @@
               <input type="date" id="ma-duty-date">
             </div>
           </div>
+          <label class="field-checkbox" for="ma-crosses-midnight">
+            <input type="checkbox" id="ma-crosses-midnight">
+            <span>Duty crosses midnight (ends the next day)</span>
+          </label>
+          <div class="field-row hidden" id="ma-end-date-row">
+            <div class="field">
+              <label for="ma-duty-end-date">Next Day Date</label>
+              <input type="date" id="ma-duty-end-date">
+            </div>
+          </div>
           <button class="btn btn-secondary" id="ma-btn-load" type="button" disabled>Load Attendance</button>
 
           <div class="msg msg-error hidden" id="ma-attendance-error" role="alert"></div>
