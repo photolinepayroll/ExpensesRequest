@@ -588,6 +588,11 @@ function openLineItemPreview_(line, options) {
       '</div>'
     : formatCurrency(line.Amount);
 
+  var gpsRowHtml = line.GpsMapLink
+    ? '<div class="receipt-modal-row"><span class="rm-label">GPS Location</span><span class="rm-value">' +
+      '<a href="' + escapeHtml_(line.GpsMapLink) + '" target="_blank" rel="noopener">View Map</a></span></div>'
+    : '';
+
   detailsPane.innerHTML =
     '<h3>Line item details</h3>' +
     '<div class="receipt-modal-row"><span class="rm-label">Date</span><span class="rm-value">' + escapeHtml_(formatDateDisplay(line.Date)) + '</span></div>' +
@@ -595,6 +600,7 @@ function openLineItemPreview_(line, options) {
     '<div class="receipt-modal-row"><span class="rm-label">Location</span><span class="rm-value">' + escapeHtml_(line.BaseLocation) + '</span></div>' +
     '<div class="receipt-modal-row"><span class="rm-label">Description</span><span class="rm-value">' + escapeHtml_(line.Description) + '</span></div>' +
     '<div class="receipt-modal-row"><span class="rm-label">Amount</span><span class="rm-value">' + amountHtml + '</span></div>' +
+    gpsRowHtml +
     '<div class="msg msg-error hidden receipt-modal-error" role="alert"></div>';
 
   if (options.editable) {

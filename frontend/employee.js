@@ -391,7 +391,8 @@ function collectLineItems() {
       amount: Number(row.querySelector('.li-amount').value),
       description: row.querySelector('.li-description').value.trim(),
       file: null,
-      receiptUrl: row.dataset.receiptUrl || ''
+      receiptUrl: row.dataset.receiptUrl || '',
+      gpsMapLink: row.dataset.gpsMapLink || ''
     };
     lines.push(line);
 

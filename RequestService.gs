@@ -45,7 +45,8 @@ function submitLiquidationRequest(payload) {
         BaseLocation: line.baseLocation,
         Amount: amount,
         Description: line.description,
-        ReceiptFileURL: receiptUrl
+        ReceiptFileURL: receiptUrl,
+        GpsMapLink: line.gpsMapLink || ''
       });
     });
 

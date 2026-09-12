@@ -544,13 +544,12 @@ function maHandleAddToNewRequest_() {
   row.querySelector('.li-amount').value = maLastSavedLineItem.total.toFixed(2);
   row.querySelector('.li-description').value =
     (maLastSavedLineItem.startDestination || 'Start') + ' → ' + (maLastSavedLineItem.endDestination || 'End') +
-    ' (' + maLastSavedLineItem.dutyHours.toFixed(2) + ' hrs)' +
-    (maLastSavedLineItem.endGpsMapLink ? ' — GPS: ' + maLastSavedLineItem.endGpsMapLink : '');
+    ' (' + maLastSavedLineItem.dutyHours.toFixed(2) + ' hrs)';
   if (hasLocation) {
     row.querySelector('.li-location').value = maLastSavedLineItem.city +
       (maLastSavedLineItem.areaRegion ? ' — ' + maLastSavedLineItem.areaRegion : '');
   }
-  maLockRowAsMealAllowance_(row, maLastSavedLineItem.photoLink);
+  maLockRowAsMealAllowance_(row, maLastSavedLineItem.photoLink, maLastSavedLineItem.endGpsMapLink);
 
   updateRunningTotal();
   hideEl($('ma-btn-add-to-request'));
@@ -566,7 +565,7 @@ function maHandleAddToNewRequest_() {
 // employee's region, not necessarily the literal place they were at (real
 // duty sometimes happens at an establishment that isn't in the store list
 // at all), so the actual location text needs to stay correctable.
-function maLockRowAsMealAllowance_(row, photoLink) {
+function maLockRowAsMealAllowance_(row, photoLink, gpsMapLink) {
   var categorySelect = row.querySelector('.li-category');
   var maOption = document.createElement('option');
   maOption.value = 'Meal Allowance';
@@ -575,14 +574,19 @@ function maLockRowAsMealAllowance_(row, photoLink) {
   categorySelect.value = 'Meal Allowance';
   categorySelect.disabled = true;
 
+  var gpsLinkHtml = gpsMapLink
+    ? ' <a href="' + escapeHtml_(gpsMapLink) + '" target="_blank" rel="noopener">View GPS Map Link</a>'
+    : '';
   var fileField = row.querySelector('.li-file-field');
   fileField.innerHTML = '<label>Receipt</label><p><a href="' + escapeHtml_(photoLink) +
-    '" target="_blank" rel="noopener">View attendance photo</a> <span class="muted">(auto-attached)</span></p>';
+    '" target="_blank" rel="noopener">View attendance photo</a> <span class="muted">(auto-attached)</span>' +
+    gpsLinkHtml + '</p>';
 
   row.querySelector('.li-date').readOnly = true;
   row.querySelector('.li-amount').readOnly = true;
 
   row.dataset.receiptUrl = photoLink;
+  row.dataset.gpsMapLink = gpsMapLink || '';
 }
 
 // ---- Reset helpers ----
