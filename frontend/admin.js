@@ -286,12 +286,6 @@ function downloadTextFile_(filename, mimeType, text) {
   URL.revokeObjectURL(url);
 }
 
-function formatDateForExport_(value) {
-  if (!value) return '';
-  var d = new Date(value);
-  return isNaN(d.getTime()) ? String(value) : d.toLocaleDateString();
-}
-
 // Builds the print-preview report as a single HTML string: a summary table
 // followed by one full-page receipt image per line item, then a trailing
 // note listing any line with no ReceiptFileURL. Uses driveThumbnailUrl_
@@ -307,10 +301,10 @@ function buildExportReportHtml_(requests) {
       '<td>' + escapeHtml_(req.EmployeeName) + '</td>' +
       '<td>' + escapeHtml_(STATUS_DISPLAY_LABELS[req.Status] || req.Status) + '</td>' +
       '<td>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
-      '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.ApprovedDate)) + '</td>' +
-      '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.ReviewedDate)) + '</td>' +
-      '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateForExport_(req.AuthorizedDate)) + '</td>' +
-      '<td>' + escapeHtml_(formatDateForExport_(req.CreditingDate)) + '</td>' +
+      '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ApprovedDate)) + '</td>' +
+      '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ReviewedDate)) + '</td>' +
+      '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.AuthorizedDate)) + '</td>' +
+      '<td>' + escapeHtml_(formatDateDisplay(req.CreditingDate)) + '</td>' +
       '</tr>';
   }).join('');
 
@@ -320,11 +314,11 @@ function buildExportReportHtml_(requests) {
     (req.lines || []).forEach(function (line) {
       if (!line.ReceiptFileURL) {
         missing.push(req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-          formatDateForExport_(line.Date) + ' — ' + line.Category + ' (No receipt on file)');
+          formatDateDisplay(line.Date) + ' — ' + line.Category + ' (No receipt on file)');
         return;
       }
       var caption = req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-        formatDateForExport_(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount);
+        formatDateDisplay(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount);
       receiptPages.push(
         '<div class="receipt-page">' +
         '<p class="receipt-caption">' + escapeHtml_(caption) + '</p>' +
@@ -388,6 +382,19 @@ function handleExportClick_() {
   btn.disabled = true;
   btn.querySelector('span').textContent = 'Exporting...';
 
+  // window.open must happen synchronously, right here in the click handler,
+  // before any await/.then() — browsers (Safari especially) only honor the
+  // "user activation" window open request during synchronous execution of
+  // the click handler. Opening it after the Promise.all round-trip below
+  // gets silently blocked even when the user never configured a popup
+  // blocker. A placeholder is written immediately and swapped for the real
+  // report once the data resolves.
+  var reportWindow = window.open('', '_blank');
+  if (reportWindow) {
+    reportWindow.document.write('<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px;color:#64748b">Loading export…</body></html>');
+    reportWindow.document.close();
+  }
+
   Promise.all([
     runServer('getAllRequestsForPayroll', 'Reviewed'),
     runServer('getAllRequestsForPayroll', 'Authorized')
@@ -398,6 +405,7 @@ function handleExportClick_() {
     }
     var requests = results[0].concat(results[1]);
     if (!requests.length) {
+      if (reportWindow) reportWindow.close();
       setMessage(errorEl, 'No Reviewed or Disbursed requests to export.', true);
       return;
     }
@@ -405,11 +413,11 @@ function handleExportClick_() {
     var dateStamp = new Date().toISOString().slice(0, 10);
     downloadTextFile_('liquidation-export-' + dateStamp + '.csv', 'text/csv', buildExportCsv_(requests));
 
-    var reportWindow = window.open('', '_blank');
     if (!reportWindow) {
       setMessage(errorEl, 'Please allow popups for this site to view the printable report.', true);
       return;
     }
+    reportWindow.document.open();
     reportWindow.document.write(buildExportReportHtml_(requests));
     reportWindow.document.close();
   }).catch(function (err) {
