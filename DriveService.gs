@@ -34,6 +34,30 @@ function extractDriveFileId_(url) {
   return match ? match[0] : null;
 }
 
+// Walks a file's parent-folder chain up to the root, confirming it actually
+// lives under this app's Drive root (uploadReceiptFile_'s
+// <DRIVE_ROOT_FOLDER_ID>/<EmployeeID>/<RequestID>/<file> tree) rather than
+// being some other file the deploying account happens to have access to.
+// Written as a general ancestor walk rather than hardcoding "2 levels up"
+// so it keeps working if that folder depth ever changes.
+function isUnderDriveRoot_(file) {
+  var rootId = getDriveRootFolder_().getId();
+  var current = file;
+  var guard = 0; // Drive folder chains are shallow in practice; this just prevents an infinite loop if Drive ever returns a cycle
+  while (guard++ < 10) {
+    var parents = current.getParents();
+    if (!parents.hasNext()) {
+      return false;
+    }
+    var parent = parents.next();
+    if (parent.getId() === rootId) {
+      return true;
+    }
+    current = parent;
+  }
+  return false;
+}
+
 // Returns a receipt's raw bytes as base64 so client-side PDF generation
 // (jsPDF) can embed it directly — a plain <img src> works cross-origin for
 // on-screen display (see driveThumbnailUrl_), but pulling a cross-origin
@@ -41,13 +65,21 @@ function extractDriveFileId_(url) {
 // canvas. Read-only; never throws (used in a loop across many receipts in
 // the batch export, so one missing/deleted file must not abort the whole
 // export) — see RequestService.gs's export caller for how failures surface.
+// Scoped to this app's own Drive root (isUnderDriveRoot_) so it can't be used
+// to fetch arbitrary files the deploying account happens to have access to;
+// out-of-scope files fail with the same generic error as a missing file, so
+// a caller can't distinguish "doesn't exist" from "exists but isn't yours".
 function getReceiptImageBase64(driveUrl) {
   var fileId = extractDriveFileId_(driveUrl);
   if (!fileId) {
     return { success: false, error: 'Invalid receipt URL.' };
   }
   try {
-    var blob = DriveApp.getFileById(fileId).getBlob();
+    var driveFile = DriveApp.getFileById(fileId);
+    if (!isUnderDriveRoot_(driveFile)) {
+      return { success: false, error: 'Receipt not found or inaccessible.' };
+    }
+    var blob = driveFile.getBlob();
     return {
       success: true,
       base64: Utilities.base64Encode(blob.getBytes()),
