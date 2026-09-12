@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Expense Liquidation Request</title>
+  <base target="_top">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <img src="logo.png" alt="Photoline" class="brand-logo">
+        <div>
+          <h1>Expense Liquidation</h1>
+          <span class="muted">Submit and track reimbursement requests</span>
+        </div>
+      </div>
+      <nav class="view-switch" aria-label="Switch view">
+        <a href="index.html" class="active">Employee</a>
+        <a href="admin.html">Approvers</a>
+      </nav>
+    </header>
+
+    <!-- EMPLOYEE: ID entry -->
+    <section id="view-login" class="card hidden">
+      <h2>Enter your Biometric ID no.</h2>
+      <div class="field hero-field">
+        <label for="input-employee-id">Biometric ID no.</label>
+        <input type="text" id="input-employee-id" placeholder="e.g. xxxxx" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="btn-lookup-employee" type="button">
+        Continue
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+      </button>
+      <div class="msg msg-error hidden" id="login-error" role="alert"></div>
+    </section>
+
+    <!-- EMPLOYEE: main area (tabs) -->
+    <section id="view-employee-main" class="hidden">
+      <div class="card identity-card">
+        <div>
+          <span class="name" id="employee-display-name"></span>
+          <span class="id-tag" id="employee-display-id"></span>
+          <div class="muted" id="employee-mother-branch"></div>
+        </div>
+        <a href="#" id="link-logout" class="link-inline">Switch employee</a>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Employee sections">
+        <button class="tab-btn active" id="tab-new-request" type="button" role="tab" aria-selected="true">New Request</button>
+        <button class="tab-btn" id="tab-my-requests" type="button" role="tab" aria-selected="false">My Requests</button>
+        <button class="tab-btn" id="tab-utilities" type="button" role="tab" aria-selected="false">Utilities</button>
+      </div>
+
+      <div id="view-new-request">
+        <div class="card">
+          <h2>New Liquidation Request</h2>
+          <div id="line-items-container"></div>
+          <button class="btn btn-secondary" id="btn-add-line" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Add Line Item
+          </button>
+          <div class="total-bar">
+            <span class="label">Total Amount</span>
+            <span class="amount" id="running-total">0.00</span>
+          </div>
+          <button class="btn btn-primary btn-block" id="btn-submit-request" type="button">
+            <span id="submit-btn-label">Submit Request</span>
+          </button>
+          <div class="msg msg-error hidden" id="submit-error" role="alert"></div>
+          <div class="msg msg-success hidden" id="submit-success" role="status"></div>
+        </div>
+      </div>
+
+      <div id="view-my-requests" class="hidden">
+        <div class="card">
+          <h2>My Requests</h2>
+          <div id="my-requests-table-container">
+            <p class="muted">Loading...</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-utilities" class="hidden">
+        <div class="card">
+          <h2>Meal Allowance</h2>
+          <p class="muted">Compute duty-based meal &amp; midnight allowance from attendance records.</p>
+
+          <div class="identity-card hidden" id="ma-selected-employee">
+            <div>
+              <span class="name" id="ma-selected-name"></span>
+              <span class="id-tag" id="ma-selected-id"></span>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="ma-duty-date">Duty Date</label>
+              <input type="date" id="ma-duty-date">
+            </div>
+          </div>
+          <button class="btn btn-secondary" id="ma-btn-load" type="button" disabled>Load Attendance</button>
+
+          <div class="msg msg-error hidden" id="ma-attendance-error" role="alert"></div>
+          <p class="muted hidden" id="ma-records-empty">No attendance records found for this employee on this date.</p>
+
+          <div class="field-row hidden" id="ma-selectors">
+            <div class="field">
+              <label for="ma-start-in">Start IN</label>
+              <select id="ma-start-in"></select>
+            </div>
+            <div class="field">
+              <label for="ma-end-out">End OUT</label>
+              <select id="ma-end-out"></select>
+            </div>
+          </div>
+
+          <div class="msg msg-error hidden" id="ma-range-error" role="alert"></div>
+          <div class="detail-panel hidden" id="ma-summary"></div>
+
+          <button class="btn btn-primary btn-block hidden" id="ma-btn-confirm" type="button">Confirm &amp; Save</button>
+          <div class="msg msg-error hidden" id="ma-save-error" role="alert"></div>
+          <div class="msg msg-success hidden" id="ma-save-success" role="status"></div>
+          <button class="btn btn-secondary btn-block hidden" id="ma-btn-add-to-request" type="button">Add to New Request</button>
+          <div class="msg msg-error hidden" id="ma-add-to-request-error" role="alert"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <template id="line-item-template">
+    <div class="line-item-row">
+      <div class="line-item-header">
+        <button type="button" class="btn btn-danger btn-small btn-icon-only line-item-remove" aria-label="Remove this line item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>
+        </button>
+      </div>
+      <div class="line-item-grid">
+        <div class="field">
+          <label class="li-date-label">Date</label>
+          <input type="date" class="li-date">
+        </div>
+        <div class="field">
+          <label class="li-category-label">Category</label>
+          <select class="li-category">
+            <option value="Fare">Fare</option>
+            <option value="Accommodation">Accommodation</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="li-location-label">Base Location</label>
+          <div class="autocomplete-wrap">
+            <input type="text" class="li-location" placeholder="e.g. Manila Office" autocomplete="off">
+            <ul class="li-location-suggestions hidden"></ul>
+          </div>
+        </div>
+        <div class="field">
+          <label class="li-amount-label">Amount</label>
+          <input type="number" class="li-amount" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field span-2">
+          <label class="li-description-label">Description</label>
+          <input type="text" class="li-description" placeholder="e.g. Taxi from airport to site">
+        </div>
+        <div class="field li-file-field">
+          <label class="li-file-label">Receipt (Photo, required, max 5MB)</label>
+          <input type="file" class="li-file" accept="image/*">
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="employee.js"></script>
+  <script src="meal-allowance.js"></script>
+
+  <script>
+    initEmployeeView();
+    initMealAllowanceUtility();
+    if (!restoreEmployeeSession_()) switchTopView('view-login');
+  </script>
+</body>
+</html>

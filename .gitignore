@@ -1,0 +1,10 @@
+.clasprc.json
+node_modules/
+Thumbs.db
+.DS_Store
+
+# Local scratch downloads of real employee/attendance data used for one-off
+# Node-based testing during development — never meant to ship, and contains
+# real names/photo links. The live app fetches this data at runtime from
+# published Google Sheets, not from local copies.
+frontend/*.csv

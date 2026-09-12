@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Approvers — Expense Liquidation</title>
+  <base target="_top">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <img src="logo.png" alt="Photoline" class="brand-logo">
+        <div>
+          <h1>Expense Liquidation</h1>
+          <span class="muted">Approver review, approval &amp; disbursement</span>
+        </div>
+      </div>
+      <nav class="view-switch" aria-label="Switch view">
+        <a href="index.html">Employee</a>
+        <a href="admin.html" class="active">Approvers</a>
+      </nav>
+    </header>
+
+    <!-- Login gate -->
+    <section id="view-login" class="card">
+      <h2>Log in</h2>
+      <div class="field hero-field">
+        <label for="input-approver-userid">User ID</label>
+        <input type="text" id="input-approver-userid" autocomplete="off">
+      </div>
+      <div class="field hero-field">
+        <label for="input-approver-password">Password</label>
+        <input type="password" id="input-approver-password" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="btn-login-approver" type="button">
+        Log in
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+      </button>
+      <div class="msg msg-error hidden" id="login-error" role="alert"></div>
+    </section>
+
+    <!-- Requests queue (shown after PIN login) -->
+    <section id="view-admin" class="hidden">
+      <div class="card identity-card">
+        <div>
+          <span class="name" id="approver-display-name"></span>
+          <span class="id-tag" id="approver-display-role"></span>
+        </div>
+        <a href="#" id="link-logout" class="link-inline">Log out</a>
+      </div>
+
+      <div class="card">
+        <h2>Liquidation Requests</h2>
+        <div class="field hero-field">
+          <label for="admin-status-filter">Filter by stage</label>
+          <select id="admin-status-filter">
+            <option value="Pending">Pending</option>
+            <option value="Approved">Approved</option>
+            <option value="Reviewed">Reviewed</option>
+            <option value="Authorized">Disbursed</option>
+            <option value="Rejected">Rejected</option>
+            <option value="All">All</option>
+          </select>
+        </div>
+        <div id="admin-table-container">
+          <p class="muted">Loading...</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="admin.js"></script>
+
+  <script>
+    initAdminView();
+  </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "expense-liquidation-request",
+  "private": true,
+  "scripts": {
+    "deploy": "clasp push -f"
+  }
+}

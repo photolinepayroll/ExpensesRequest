@@ -1,0 +1,14 @@
+**/**
+!appsscript.json
+!Code.gs
+!Config.gs
+!SheetService.gs
+!EmployeeService.gs
+!ApproverService.gs
+!RequestService.gs
+!DriveService.gs
+!IdGenerator.gs
+!Validation.gs
+!Setup.gs
+!MealAllowanceService.gs
+!StoreDirectoryService.gs
