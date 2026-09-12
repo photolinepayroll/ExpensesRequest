@@ -377,3 +377,123 @@ function drawSummaryTable_(doc, requests) {
 
   return y;
 }
+
+// Adds one page per receipt image, captioned with request/line context.
+// Returns a list of { requestId, employeeName, lineDate, category, reason }
+// for any line that had no ReceiptFileURL or whose fetch failed — the
+// caller lists these on the summary page rather than inserting a
+// placeholder page (this app's chosen "don't hide it, don't fake it" rule).
+function addReceiptPages_(doc, requests) {
+  var missing = [];
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+
+  var lineTasks = [];
+  requests.forEach(function (req) {
+    (req.lines || []).forEach(function (line) {
+      lineTasks.push({ req: req, line: line });
+    });
+  });
+
+  // Sequential, not parallel: Apps Script's concurrent-execution quota is
+  // shared project-wide, and this isn't latency-critical since the Export
+  // button already shows a loading state (Step 3 below).
+  return lineTasks.reduce(function (promiseChain, task) {
+    return promiseChain.then(function () {
+      var req = task.req, line = task.line;
+      if (!line.ReceiptFileURL) {
+        missing.push({ requestId: req.RequestID, employeeName: req.EmployeeName, lineDate: line.Date, category: line.Category, reason: 'No receipt on file' });
+        return;
+      }
+      return runServer('getReceiptImageBase64', line.ReceiptFileURL).then(function (result) {
+        if (!result.success) {
+          missing.push({ requestId: req.RequestID, employeeName: req.EmployeeName, lineDate: line.Date, category: line.Category, reason: result.error });
+          return;
+        }
+        doc.addPage();
+        doc.setFontSize(11);
+        doc.setFont(undefined, 'bold');
+        var caption = req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+          formatDateForExport_(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount);
+        doc.text(caption, EXPORT_PDF_MARGIN, EXPORT_PDF_MARGIN);
+        doc.setFont(undefined, 'normal');
+
+        var format = /png/i.test(result.mimeType) ? 'PNG' : 'JPEG';
+        var maxWidth = pageWidth - EXPORT_PDF_MARGIN * 2;
+        var maxHeight = pageHeight - EXPORT_PDF_MARGIN * 2 - 12;
+        var props = doc.getImageProperties('data:' + result.mimeType + ';base64,' + result.base64);
+        var ratio = Math.min(maxWidth / props.width, maxHeight / props.height);
+        var drawWidth = props.width * ratio;
+        var drawHeight = props.height * ratio;
+        var x = (pageWidth - drawWidth) / 2;
+        var y = EXPORT_PDF_MARGIN + 8;
+        doc.addImage('data:' + result.mimeType + ';base64,' + result.base64, format, x, y, drawWidth, drawHeight);
+      }).catch(function (err) {
+        missing.push({ requestId: req.RequestID, employeeName: req.EmployeeName, lineDate: line.Date, category: line.Category, reason: err.message });
+      });
+    });
+  }, Promise.resolve()).then(function () { return missing; });
+}
+
+// Appends the missing-receipts note as extra pages after the receipt images,
+// listing every line that had no receipt or failed to fetch.
+function addMissingReceiptsNote_(doc, missing) {
+  if (!missing.length) return;
+  doc.addPage();
+  var y = EXPORT_PDF_MARGIN;
+  doc.setFontSize(12);
+  doc.setFont(undefined, 'bold');
+  doc.text('Lines with no receipt on file:', EXPORT_PDF_MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(9);
+  y += 8;
+  var pageHeight = doc.internal.pageSize.getHeight();
+  missing.forEach(function (m) {
+    if (y > pageHeight - EXPORT_PDF_MARGIN) {
+      doc.addPage();
+      y = EXPORT_PDF_MARGIN;
+    }
+    var line = m.requestId + ' — ' + m.employeeName + ' — ' + formatDateForExport_(m.lineDate) + ' — ' + m.category + ' (' + m.reason + ')';
+    doc.text(line, EXPORT_PDF_MARGIN, y);
+    y += 6;
+  });
+}
+
+function initExportButton_() {
+  $('btn-export').addEventListener('click', handleExportClick_);
+}
+
+function handleExportClick_() {
+  var btn = $('btn-export');
+  var errorEl = $('export-error');
+  clearMessage(errorEl);
+  var originalLabel = btn.querySelector('span').textContent;
+  btn.disabled = true;
+  btn.querySelector('span').textContent = 'Exporting...';
+
+  Promise.all([
+    runServer('getAllRequestsForPayroll', 'Reviewed'),
+    runServer('getAllRequestsForPayroll', 'Authorized')
+  ]).then(function (results) {
+    var requests = results[0].concat(results[1]);
+    if (!requests.length) {
+      setMessage(errorEl, 'No Reviewed or Disbursed requests to export.', true);
+      return null;
+    }
+
+    var doc = new window.jspdf.jsPDF('l', 'mm', 'a4');
+    drawSummaryTable_(doc, requests);
+
+    return addReceiptPages_(doc, requests).then(function (missing) {
+      addMissingReceiptsNote_(doc, missing);
+      var dateStamp = new Date().toISOString().slice(0, 10);
+      doc.save('liquidation-export-' + dateStamp + '.pdf');
+      downloadTextFile_('liquidation-export-' + dateStamp + '.csv', 'text/csv', buildExportCsv_(requests));
+    });
+  }).catch(function (err) {
+    setMessage(errorEl, 'Export failed: ' + err.message, true);
+  }).finally(function () {
+    btn.disabled = false;
+    btn.querySelector('span').textContent = originalLabel;
+  });
+}
