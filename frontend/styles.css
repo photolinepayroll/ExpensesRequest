@@ -144,6 +144,15 @@ header.app-header {
   margin-bottom: var(--space-4);
 }
 
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.card-header-row h2 { margin: 0; }
+
 .identity-card {
   display: flex;
   align-items: center;

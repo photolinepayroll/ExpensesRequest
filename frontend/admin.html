@@ -55,7 +55,13 @@
       </div>
 
       <div class="card">
-        <h2>Liquidation Requests</h2>
+        <div class="card-header-row">
+          <h2>Liquidation Requests</h2>
+          <button class="btn btn-secondary btn-small" id="btn-export" type="button">
+            <span>Export Reviewed/Disbursed</span>
+          </button>
+        </div>
+        <div class="msg msg-error hidden" id="export-error" role="alert"></div>
         <div class="field hero-field">
           <label for="admin-status-filter">Filter by stage</label>
           <select id="admin-status-filter">
@@ -74,6 +80,7 @@
     </section>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="config.js"></script>
   <script src="common.js"></script>
   <script src="admin.js"></script>
