@@ -28,7 +28,7 @@ function handleEmployeeLookup() {
   }
 
   $('btn-lookup-employee').disabled = true;
-  runServer('getEmployeeByID', employeeId)
+  lookupEmployeeFromCsv_(employeeId)
     .then(function (result) {
       $('btn-lookup-employee').disabled = false;
       if (!result.found) {
@@ -76,82 +76,9 @@ function restoreEmployeeSession_() {
 // approve regardless of what this shows, so a fetch failure here degrades to
 // "hide the Utilities tab" (fail closed) rather than blocking anything else.
 
-// Column indices in the store-directory CSV (0-indexed) — several headers
-// are blank/duplicated in that sheet, so columns are addressed positionally,
-// not by header name. See frontend/config.js's STORE_DIRECTORY_CSV_URL comment.
-// NOTE: Area Head is read from columns 24/25, NOT the more obvious-looking
-// 11/12 — confirmed via real data that 11/12 are off-by-one-row misaligned
-// with column 26 (STORES) for most stores, while 24/25 are correctly
-// aligned. See StoreDirectoryService.gs's file header comment for details.
-var STORE_DIR_COL_AREHEAD_BIO = 24;
-var STORE_DIR_COL_AREHEAD_NAME = 25;
-var STORE_DIR_COL_TECH_BIO = 16;
-var STORE_DIR_COL_AUDIT_BIO = 21;
-var STORE_DIR_COL_STORE = 26;
-var STORE_DIR_COL_HO_BIO = 30;
-
-var storeDirectoryRowsCache = null;
-
-function loadStoreDirectory_() {
-  if (storeDirectoryRowsCache) return Promise.resolve(storeDirectoryRowsCache);
-  return fetch(STORE_DIRECTORY_CSV_URL)
-    .then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.text();
-    })
-    .then(function (text) {
-      storeDirectoryRowsCache = parseCsv_(text).slice(1); // drop header row
-      return storeDirectoryRowsCache;
-    });
-}
-
-// Department is a broader signal than the per-store directory — that sheet
-// only lists ONE named Tech and ONE named Auditor per store, but many more
-// employees can carry a Technical/Audit Department code without being that
-// one specific per-store assignee. Matches loosely (substring, not exact) to
-// tolerate both abbreviations ("TEC", "Aud") and full words ("Technical",
-// "Auditing") already seen in real Employees data. Mirrors
-// StoreDirectoryService.gs's isTechnicalDepartment_/isAuditDepartment_.
-function isTechnicalDepartment_(department) {
-  var d = String(department || '').trim().toLowerCase();
-  return d === 'tec' || d.indexOf('tech') !== -1;
-}
-function isAuditDepartment_(department) {
-  var d = String(department || '').trim().toLowerCase();
-  return d === 'aud' || d.indexOf('audit') !== -1;
-}
-
-// Returns { category: 'AreaHead'|'Technical'|'Audit'|'HeadOffice'|'Staff', store } —
-// store is only set when found via the per-store directory listing (Staff,
-// HeadOffice, and Technical/Audit resolved only via Department, aren't tied
-// to one specific store; Mother Branch falls back to their own BaseLocation,
-// except HeadOffice which is just labeled as such).
-function resolveEmployeeCategory_(rows, employeeId, department) {
-  var id = String(employeeId || '').trim().toLowerCase();
-
-  function findByColumn(bioCol) {
-    return rows.filter(function (r) {
-      return String(r[bioCol] || '').trim().toLowerCase() === id;
-    })[0];
-  }
-
-  var areHeadRow = findByColumn(STORE_DIR_COL_AREHEAD_BIO);
-  if (areHeadRow) return { category: 'AreaHead', store: areHeadRow[STORE_DIR_COL_STORE] };
-
-  var techRow = findByColumn(STORE_DIR_COL_TECH_BIO);
-  if (techRow) return { category: 'Technical', store: techRow[STORE_DIR_COL_STORE] };
-
-  var auditRow = findByColumn(STORE_DIR_COL_AUDIT_BIO);
-  if (auditRow) return { category: 'Audit', store: auditRow[STORE_DIR_COL_STORE] };
-
-  var hoRow = findByColumn(STORE_DIR_COL_HO_BIO);
-  if (hoRow) return { category: 'HeadOffice', store: 'Head Office' };
-
-  if (isTechnicalDepartment_(department)) return { category: 'Technical', store: null };
-  if (isAuditDepartment_(department)) return { category: 'Audit', store: null };
-
-  return { category: 'Staff', store: null };
-}
+// STORE_DIR_COL_* constants, loadStoreDirectory_, isTechnicalDepartment_/
+// isAuditDepartment_, and resolveEmployeeCategory_ moved to common.js so
+// admin.js can also use them (Pending-queue routing scope) — see common.js.
 
 // The store-directory sheet (STORE_DIRECTORY_CSV_URL, used by
 // resolveEmployeeCategory_ above) and the store-coordinates sheet
@@ -314,7 +241,44 @@ function resetLineItems() {
 }
 
 // Fields whose input+label pair need a unique id/for per cloned row (template markup is static and repeats).
-var LINE_ITEM_FIELDS = ['date', 'category', 'location', 'amount', 'description', 'file'];
+var LINE_ITEM_FIELDS = ['date', 'category', 'location', 'amount', 'description', 'file', 'cutoffEndDate'];
+
+var RECEIPT_LABEL_DEFAULT = 'Receipt (Photo, required, max 5MB)';
+var RECEIPT_LABEL_TIMESHEET = 'Timesheet Photo (required, max 5MB)';
+
+// Toggles a line-item row's fields between the normal expense layout and the
+// Timesheet layout (no Amount/Location/Description, a Cut-off End Date
+// instead of relying on the single Date field for the whole period).
+function applyCategoryLayout_(row) {
+  var isTimesheet = row.querySelector('.li-category').value === 'Timesheet';
+
+  var locationField = row.querySelector('.li-location-field');
+  var amountField = row.querySelector('.li-amount-field');
+  var descriptionField = row.querySelector('.li-description-field');
+  var cutoffField = row.querySelector('.li-cutoff-end-field');
+  var fileLabel = row.querySelector('.li-file-label');
+  var amountInput = row.querySelector('.li-amount');
+
+  locationField.classList.toggle('hidden', isTimesheet);
+  amountField.classList.toggle('hidden', isTimesheet);
+  descriptionField.classList.toggle('hidden', isTimesheet);
+  cutoffField.classList.toggle('hidden', !isTimesheet);
+
+  fileLabel.textContent = isTimesheet ? RECEIPT_LABEL_TIMESHEET : RECEIPT_LABEL_DEFAULT;
+
+  if (isTimesheet) {
+    amountInput.value = '0';
+    amountInput.readOnly = true;
+  } else {
+    amountInput.readOnly = false;
+    // Deliberately don't clear location/amount/description on switch-back —
+    // they're re-required by validation regardless, so preserving whatever
+    // was typed before flipping to Timesheet and back is less surprising
+    // than silently wiping it.
+  }
+
+  updateRunningTotal();
+}
 
 // Formats a Date as YYYY-MM-DD in local time (toISOString() would shift by timezone offset).
 function formatDateForInput_(date) {
@@ -339,7 +303,7 @@ function addLineItemRow() {
     label.setAttribute('for', fieldId);
   });
 
-  ['date', 'category', 'location', 'amount', 'description', 'file'].forEach(function (field) {
+  ['date', 'category', 'location', 'amount', 'description', 'file', 'cutoffEndDate'].forEach(function (field) {
     var requiredInput = clone.querySelector('.li-' + field);
     var clearEvent = (field === 'category' || field === 'file') ? 'change' : 'input';
     requiredInput.addEventListener(clearEvent, function () {
@@ -357,6 +321,8 @@ function addLineItemRow() {
   oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
   dateInput.max = formatDateForInput_(today);
   dateInput.min = formatDateForInput_(oneMonthAgo);
+  clone.querySelector('.li-cutoffEndDate').max = dateInput.max;
+  clone.querySelector('.li-cutoffEndDate').min = dateInput.min;
 
   clone.querySelector('.li-amount').addEventListener('input', updateRunningTotal);
   clone.querySelector('.line-item-remove').addEventListener('click', function (e) {
@@ -365,9 +331,15 @@ function addLineItemRow() {
     updateRunningTotal();
   });
 
+  clone.querySelector('.li-category').addEventListener('change', function (e) {
+    applyCategoryLayout_(e.target.closest('.line-item-row'));
+  });
+
   wireLocationAutocomplete_(clone.querySelector('.li-location'), clone.querySelector('.li-location-suggestions'));
 
+  var rowEl = clone.querySelector('.line-item-row');
   $('line-items-container').appendChild(clone);
+  applyCategoryLayout_(rowEl);
 }
 
 function updateRunningTotal() {
@@ -384,12 +356,16 @@ function collectLineItems() {
   var fileReadPromises = [];
 
   rows.forEach(function (row) {
+    var category = row.querySelector('.li-category').value;
+    var isTimesheet = category === 'Timesheet';
+
     var line = {
       date: row.querySelector('.li-date').value,
-      category: row.querySelector('.li-category').value,
-      baseLocation: row.querySelector('.li-location').value.trim(),
-      amount: Number(row.querySelector('.li-amount').value),
-      description: row.querySelector('.li-description').value.trim(),
+      category: category,
+      baseLocation: isTimesheet ? '' : row.querySelector('.li-location').value.trim(),
+      amount: isTimesheet ? 0 : Number(row.querySelector('.li-amount').value),
+      description: isTimesheet ? '' : row.querySelector('.li-description').value.trim(),
+      cutoffEndDate: isTimesheet ? row.querySelector('.li-cutoffEndDate').value : '',
       file: null,
       receiptUrl: row.dataset.receiptUrl || '',
       gpsMapLink: row.dataset.gpsMapLink || ''
@@ -479,8 +455,16 @@ function validateRequiredLineFields_() {
   var firstInvalid = null;
 
   rows.forEach(function (row) {
+    var isTimesheet = row.querySelector('.li-category').value === 'Timesheet';
+
     requiredFields.forEach(function (field) {
       var input = row.querySelector('.li-' + field);
+
+      if (isTimesheet && (field === 'location' || field === 'amount' || field === 'description')) {
+        input.classList.remove('input-error');
+        return;
+      }
+
       var isEmpty = (field === 'amount')
         ? !(Number(input.value) > 0)
         : !input.value.trim();
@@ -493,6 +477,17 @@ function validateRequiredLineFields_() {
         input.classList.remove('input-error');
       }
     });
+
+    if (isTimesheet) {
+      var cutoffInput = row.querySelector('.li-cutoffEndDate');
+      if (!cutoffInput.value.trim()) {
+        cutoffInput.classList.add('input-error');
+        allValid = false;
+        if (!firstInvalid) firstInvalid = cutoffInput;
+      } else {
+        cutoffInput.classList.remove('input-error');
+      }
+    }
 
     // Meal Allowance hand-off rows already carry a receiptUrl (their file
     // input is replaced entirely — see maLockRowAsMealAllowance_ in
@@ -542,9 +537,12 @@ function handleSubmitRequest() {
     submitLabel.textContent = 'Submit Request';
   }
 
+  var submittedLines;
+
   Promise.resolve()
     .then(collectLineItems)
     .then(function (lines) {
+      submittedLines = lines;
       return runServer('submitLiquidationRequest', {
         employeeId: currentEmployee.EmployeeID,
         employeeName: currentEmployee.Name,
@@ -559,7 +557,12 @@ function handleSubmitRequest() {
       }
       setMessage(successEl, 'Request ' + result.requestId + ' submitted successfully.', false);
       resetLineItems();
-      setEmployeeTab('my-requests');
+      // Optimistically add the new request to the CSV-based cache before
+      // switching tabs — the published CSV can lag several minutes behind
+      // the live sheet, so without this the just-submitted request would
+      // silently be missing from My Requests until that catches up.
+      patchCachedNewRequest_(result.requestId, currentEmployee.EmployeeID, currentEmployee.Name, submittedLines)
+        .then(function () { setEmployeeTab('my-requests'); });
     })
     .catch(function (err) {
       resetSubmitButton();
@@ -572,9 +575,12 @@ function handleSubmitRequest() {
 function loadMyRequests() {
   var container = $('my-requests-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading your requests...</p></div>';
-  runServer('getMyRequests', currentEmployee.EmployeeID)
+  loadJoinedRequests_()
     .then(function (requests) {
-      renderRequestsTable(container, requests, { showEmployee: false });
+      var mine = requests.filter(function (req) {
+        return String(req.EmployeeID) === String(currentEmployee.EmployeeID);
+      });
+      renderRequestsTable(container, mine, { showEmployee: false });
     })
     .catch(function (err) {
       container.innerHTML = '<div class="msg msg-error" role="alert">' + MSG_ICON_ERROR + '<span>Failed to load: ' + err.message + '</span></div>';

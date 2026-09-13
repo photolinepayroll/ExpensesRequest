@@ -17,38 +17,61 @@ function validateSubmission_(payload) {
     return 'At least one line item is required.';
   }
 
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var oneMonthAgo = new Date(today);
+  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+  // Shared by both a line's start date and (for Timesheet) its cut-off end
+  // date — same future/one-month-ago window applies to both.
+  function dateSanityError_(rawValue, fieldLabel) {
+    if (!rawValue || isNaN(new Date(rawValue).getTime())) {
+      return fieldLabel + 'a valid date is required.';
+    }
+    var d = new Date(rawValue);
+    d.setHours(0, 0, 0, 0);
+    if (d.getTime() > today.getTime()) {
+      return fieldLabel + 'date cannot be in the future.';
+    }
+    if (d.getTime() < oneMonthAgo.getTime()) {
+      return fieldLabel + 'date must be within the last 1 month.';
+    }
+    return null;
+  }
+
   for (var i = 0; i < payload.lines.length; i++) {
     var line = payload.lines[i];
     var label = 'Line ' + (i + 1) + ': ';
 
-    if (!line.date || isNaN(new Date(line.date).getTime())) {
-      return label + 'a valid date is required.';
-    }
-    var lineDate = new Date(line.date);
-    lineDate.setHours(0, 0, 0, 0);
-    var today = new Date();
-    today.setHours(0, 0, 0, 0);
-    var oneMonthAgo = new Date(today);
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-    if (lineDate.getTime() > today.getTime()) {
-      return label + 'date cannot be in the future.';
-    }
-    if (lineDate.getTime() < oneMonthAgo.getTime()) {
-      return label + 'date must be within the last 1 month.';
-    }
+    var startDateError = dateSanityError_(line.date, label);
+    if (startDateError) return startDateError;
+
     if (CATEGORIES.indexOf(line.category) === -1) {
       return label + 'category must be one of ' + CATEGORIES.join(', ') + '.';
     }
-    if (!line.baseLocation || String(line.baseLocation).trim() === '') {
-      return label + 'base location is required.';
+
+    if (line.category === 'Timesheet') {
+      var endDateError = dateSanityError_(line.cutoffEndDate, label + 'cut-off end date — ');
+      if (endDateError) return endDateError;
+
+      var startDate = new Date(line.date);
+      var endDate = new Date(line.cutoffEndDate);
+      if (endDate.getTime() < startDate.getTime()) {
+        return label + 'cut-off end date cannot be before the start date.';
+      }
+    } else {
+      if (!line.baseLocation || String(line.baseLocation).trim() === '') {
+        return label + 'base location is required.';
+      }
+      var amount = Number(line.amount);
+      if (!isFinite(amount) || amount <= 0) {
+        return label + 'amount must be a positive number.';
+      }
+      if (!line.description || String(line.description).trim() === '') {
+        return label + 'description is required.';
+      }
     }
-    var amount = Number(line.amount);
-    if (!isFinite(amount) || amount <= 0) {
-      return label + 'amount must be a positive number.';
-    }
-    if (!line.description || String(line.description).trim() === '') {
-      return label + 'description is required.';
-    }
+
     if (!line.receiptUrl) {
       if (!line.file) {
         return label + 'a receipt photo is required.';

@@ -18,3 +18,17 @@ var STORE_COORDINATES_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-
 // and gate the Employee Utilities tab. Columns have duplicate/blank headers —
 // read by fixed column index (see employee.js), not by header name.
 var STORE_DIRECTORY_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQFtMwuPhOPY7h4GlrGI4DhTrnHx4OKBcEIizjwAH53N1NWnnrdxZftEnNQmDePhtEvFPoLjkRd61TX/pub?gid=1184189088&single=true&output=csv';
+
+// Published (View → Publish to web, CSV) mirrors of this app's own Employees/
+// Requests/RequestLines sheets — read-only, client-side speed path for the
+// Employee ID login lookup and the My Requests / Approver queue lists, so
+// those don't need a live Apps Script round trip on every load. Same
+// exposure level as the existing open API (no auth on getEmployeeByID/
+// getMyRequests/getAllRequestsForPayroll either), just reachable via a
+// simpler URL. Can lag a few minutes behind the live sheet (Google's
+// publish-to-web refresh interval) — accepted trade-off for read paths only;
+// every mutation (submit/approve/reject/amount-edit/login) still goes
+// through Apps Script exactly as before.
+var EMPLOYEES_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQFtMwuPhOPY7h4GlrGI4DhTrnHx4OKBcEIizjwAH53N1NWnnrdxZftEnNQmDePhtEvFPoLjkRd61TX/pub?gid=2074813078&single=true&output=csv';
+var REQUESTS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQFtMwuPhOPY7h4GlrGI4DhTrnHx4OKBcEIizjwAH53N1NWnnrdxZftEnNQmDePhtEvFPoLjkRd61TX/pub?gid=1400500118&single=true&output=csv';
+var REQUEST_LINES_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQFtMwuPhOPY7h4GlrGI4DhTrnHx4OKBcEIizjwAH53N1NWnnrdxZftEnNQmDePhtEvFPoLjkRd61TX/pub?gid=1428970629&single=true&output=csv';

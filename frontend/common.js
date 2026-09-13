@@ -42,6 +42,21 @@ function formatDateDisplay(value) {
   return d.toLocaleDateString();
 }
 
+// Renders a single date, or (when a cut-off end date is present, i.e. a
+// Timesheet line) a "start – end" range. Shared by buildLineItemsHtml_, the
+// receipt modal, and admin.js's CSV/print-report builders.
+function formatLineDateDisplay_(line) {
+  if (line.CutoffEndDate) {
+    return formatDateDisplay(line.Date) + ' – ' + formatDateDisplay(line.CutoffEndDate);
+  }
+  return formatDateDisplay(line.Date);
+}
+
+// Timesheet lines' Amount is always 0 and isn't a real reimbursable figure.
+function formatLineAmountDisplay_(line) {
+  return line.Category === 'Timesheet' ? '—' : formatCurrency(line.Amount);
+}
+
 var STATUS_BADGE_CLASSES = {
   Pending: 'badge-pending',
   Reviewed: 'badge-reviewed',
@@ -129,12 +144,13 @@ function renderRequestsTable(container, requests, options) {
 function buildLineItemsHtml_(request) {
   var html = '<table class="data-table"><thead><tr><th>Date</th><th>Category</th><th>Location</th><th>Amount</th><th>Description</th><th>Receipt</th></tr></thead><tbody>';
   request.lines.forEach(function (line) {
+    var isTimesheet = line.Category === 'Timesheet';
     html += '<tr class="line-detail-row" data-line-id="' + escapeHtml_(line.LineID) + '" tabindex="0" role="button">';
-    html += '<td data-label="Date">' + formatDateDisplay(line.Date) + '</td>';
+    html += '<td data-label="Date">' + formatLineDateDisplay_(line) + '</td>';
     html += '<td data-label="Category">' + escapeHtml_(line.Category) + '</td>';
-    html += '<td data-label="Location">' + escapeHtml_(line.BaseLocation) + '</td>';
-    html += '<td data-label="Amount">' + formatCurrency(line.Amount) + '</td>';
-    html += '<td data-label="Description">' + escapeHtml_(line.Description) + '</td>';
+    html += '<td data-label="Location">' + (isTimesheet ? '<span class="muted">—</span>' : escapeHtml_(line.BaseLocation)) + '</td>';
+    html += '<td data-label="Amount">' + formatLineAmountDisplay_(line) + '</td>';
+    html += '<td data-label="Description">' + (isTimesheet ? '<span class="muted">—</span>' : escapeHtml_(line.Description)) + '</td>';
     html += '<td data-label="Receipt">' + (line.ReceiptFileURL
       ? '<span class="link-inline">View</span>'
       : '<span class="muted">None</span>') + '</td>';
@@ -302,6 +318,335 @@ function parseStoreCoordinatesCsv_(text) {
     });
 }
 
+// ---- Store directory (Mother Branch / employee category / Pending-queue
+// routing) — shared by employee.js (Utilities-tab-visibility mirror) and
+// admin.js (Approver queue's Pending-routing scope). A UX/display mirror of
+// StoreDirectoryService.gs's authoritative server-side resolution — the
+// server independently re-verifies routing on every advanceRequestStage/
+// updateLineItemAmount call regardless of what this shows, so a bug here can
+// only ever show an Approver the wrong Pending list, never let them
+// illegitimately approve something the server would otherwise block.
+
+// Column indices in the store-directory CSV (0-indexed) — several headers
+// are blank/duplicated in that sheet, so columns are addressed positionally,
+// not by header name. See frontend/config.js's STORE_DIRECTORY_CSV_URL comment.
+// NOTE: Area Head is read from columns 24/25, NOT the more obvious-looking
+// 11/12 — confirmed via real data that 11/12 are off-by-one-row misaligned
+// with column 26 (STORES) for most stores, while 24/25 are correctly
+// aligned. See StoreDirectoryService.gs's file header comment for details.
+var STORE_DIR_COL_JAYRIEL_BIO = 9;
+var STORE_DIR_COL_JAYRIEL_NAME = 10;
+var STORE_DIR_COL_CRIS_BIO = 14;
+var STORE_DIR_COL_CRIS_NAME = 15;
+var STORE_DIR_COL_TECH_BIO = 16;
+var STORE_DIR_COL_LANILYN_BIO = 19;
+var STORE_DIR_COL_LANILYN_NAME = 20;
+var STORE_DIR_COL_AUDIT_BIO = 21;
+var STORE_DIR_COL_AREHEAD_BIO = 24;
+var STORE_DIR_COL_AREHEAD_NAME = 25;
+var STORE_DIR_COL_STORE = 26;
+var STORE_DIR_COL_ADMIN_BIO = 28;
+var STORE_DIR_COL_ADMIN_NAME = 29;
+var STORE_DIR_COL_HO_BIO = 30;
+
+var storeDirectoryRowsCache = null;
+
+function loadStoreDirectory_() {
+  if (storeDirectoryRowsCache) return Promise.resolve(storeDirectoryRowsCache);
+  return fetch(STORE_DIRECTORY_CSV_URL)
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      storeDirectoryRowsCache = parseCsv_(text).slice(1); // drop header row
+      return storeDirectoryRowsCache;
+    });
+}
+
+// Department is a broader signal than the per-store directory — that sheet
+// only lists ONE named Tech and ONE named Auditor per store, but many more
+// employees can carry a Technical/Audit Department code without being that
+// one specific per-store assignee. Matches loosely (substring, not exact) to
+// tolerate both abbreviations ("TEC", "Aud") and full words ("Technical",
+// "Auditing") already seen in real Employees data. Mirrors
+// StoreDirectoryService.gs's isTechnicalDepartment_/isAuditDepartment_.
+function isTechnicalDepartment_(department) {
+  var d = String(department || '').trim().toLowerCase();
+  return d === 'tec' || d.indexOf('tech') !== -1;
+}
+function isAuditDepartment_(department) {
+  var d = String(department || '').trim().toLowerCase();
+  return d === 'aud' || d.indexOf('audit') !== -1;
+}
+
+// Returns { category: 'AreaHead'|'Technical'|'Audit'|'HeadOffice'|'Staff', store } —
+// store is only set when found via the per-store directory listing (Staff,
+// HeadOffice, and Technical/Audit resolved only via Department, aren't tied
+// to one specific store; Mother Branch falls back to their own BaseLocation,
+// except HeadOffice which is just labeled as such).
+function resolveEmployeeCategory_(rows, employeeId, department) {
+  var id = String(employeeId || '').trim().toLowerCase();
+
+  function findByColumn(bioCol) {
+    return rows.filter(function (r) {
+      return String(r[bioCol] || '').trim().toLowerCase() === id;
+    })[0];
+  }
+
+  var areHeadRow = findByColumn(STORE_DIR_COL_AREHEAD_BIO);
+  if (areHeadRow) return { category: 'AreaHead', store: areHeadRow[STORE_DIR_COL_STORE] };
+
+  var techRow = findByColumn(STORE_DIR_COL_TECH_BIO);
+  if (techRow) return { category: 'Technical', store: techRow[STORE_DIR_COL_STORE] };
+
+  var auditRow = findByColumn(STORE_DIR_COL_AUDIT_BIO);
+  if (auditRow) return { category: 'Audit', store: auditRow[STORE_DIR_COL_STORE] };
+
+  var hoRow = findByColumn(STORE_DIR_COL_HO_BIO);
+  if (hoRow) return { category: 'HeadOffice', store: 'Head Office' };
+
+  if (isTechnicalDepartment_(department)) return { category: 'Technical', store: null };
+  if (isAuditDepartment_(department)) return { category: 'Audit', store: null };
+
+  return { category: 'Staff', store: null };
+}
+
+function findStoreRowByName_(rows, locationText) {
+  var loc = String(locationText || '').trim().toLowerCase();
+  if (!loc) return null;
+  return rows.filter(function (r) {
+    return String(r[STORE_DIR_COL_STORE] || '').trim().toLowerCase() === loc;
+  })[0] || null;
+}
+
+// Client-side port of StoreDirectoryService.gs's resolveRequiredApprover_ —
+// used only to scope which Pending requests admin.js shows an Approver
+// (display/filtering only; advanceRequestStage/updateLineItemAmount
+// independently re-verify this same routing server-side on every call, so a
+// mismatch here can never let someone illegitimately approve a request).
+// Returns { found: false } when routing can't be determined (directory
+// unreachable, or a Staff employee's location matches no listed store) —
+// callers should treat that the same way the backend does: fail open, show
+// the request rather than hide it.
+function resolveRequiredApprover_(rows, employeeId, employeeBaseLocation, employeeDepartment, requestLineLocation) {
+  if (!rows) return { found: false };
+
+  var result = resolveEmployeeCategory_(rows, employeeId, employeeDepartment);
+
+  if (result.category === 'AreaHead') {
+    return { found: true, bioId: rows[0][STORE_DIR_COL_JAYRIEL_BIO], name: rows[0][STORE_DIR_COL_JAYRIEL_NAME] };
+  }
+  if (result.category === 'Technical') {
+    return { found: true, bioId: rows[0][STORE_DIR_COL_CRIS_BIO], name: rows[0][STORE_DIR_COL_CRIS_NAME] };
+  }
+  if (result.category === 'Audit') {
+    return { found: true, bioId: rows[0][STORE_DIR_COL_LANILYN_BIO], name: rows[0][STORE_DIR_COL_LANILYN_NAME] };
+  }
+  if (result.category === 'HeadOffice') {
+    return { found: true, bioId: rows[0][STORE_DIR_COL_ADMIN_BIO], name: rows[0][STORE_DIR_COL_ADMIN_NAME] };
+  }
+
+  // Staff: route to the Area Head of the store this request is actually
+  // for (line-item location first, employee's home BaseLocation as fallback).
+  var storeRow = findStoreRowByName_(rows, requestLineLocation) || findStoreRowByName_(rows, employeeBaseLocation);
+  if (!storeRow) return { found: false };
+  return { found: true, bioId: storeRow[STORE_DIR_COL_AREHEAD_BIO], name: storeRow[STORE_DIR_COL_AREHEAD_NAME] };
+}
+
+// ---- Joined request list (My Requests / Approver queue) — CSV-based read
+// path, a client-side port of RequestService.gs's buildRequestsWithLines_.
+// Mutations (submit/approve/reject/amount-edit) are unaffected and still go
+// through Apps Script; this is only used to render lists faster and without
+// a live round trip. Can lag a few minutes behind the live sheet (Google's
+// publish-to-web refresh interval) — an accepted trade-off for this read path.
+var requestsCsvCache = null;
+var requestLinesCsvCache = null;
+
+function loadJoinedRequests_() {
+  var requestsPromise = requestsCsvCache
+    ? Promise.resolve(requestsCsvCache)
+    : fetch(REQUESTS_CSV_URL)
+        .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.text(); })
+        .then(function (text) {
+          requestsCsvCache = csvToObjects_(parseCsv_(text));
+          return requestsCsvCache;
+        });
+
+  var linesPromise = requestLinesCsvCache
+    ? Promise.resolve(requestLinesCsvCache)
+    : fetch(REQUEST_LINES_CSV_URL)
+        .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.text(); })
+        .then(function (text) {
+          requestLinesCsvCache = csvToObjects_(parseCsv_(text));
+          return requestLinesCsvCache;
+        });
+
+  return Promise.all([requestsPromise, linesPromise]).then(function (results) {
+    var requests = results[0];
+    var allLines = results[1];
+
+    var sorted = requests.slice().sort(function (a, b) {
+      return new Date(b.DateSubmitted) - new Date(a.DateSubmitted);
+    });
+
+    return sorted.map(function (req) {
+      var lines = allLines.filter(function (line) {
+        return String(line.RequestID) === String(req.RequestID);
+      });
+      var copy = {};
+      Object.keys(req).forEach(function (k) { copy[k] = req[k]; });
+      copy.lines = lines;
+      return copy;
+    });
+  });
+}
+
+// Mirrors RequestService.gs's STAGE_FIELD_NAMES — which *By/*Date column
+// pair a given targetStage writes. Used only to optimistically patch the
+// CSV-based cache below right after a successful mutation, so the UI
+// reflects the change immediately instead of waiting for Google's
+// publish-to-web refresh (which can lag several minutes and, since
+// requestsCsvCache/requestLinesCsvCache are cached for the whole page
+// session, would otherwise never pick up the change until a full reload).
+var STAGE_FIELD_NAMES_CLIENT = {
+  Approved: { by: 'ApprovedBy', date: 'ApprovedDate' },
+  Reviewed: { by: 'ReviewedBy', date: 'ReviewedDate' },
+  Authorized: { by: 'AuthorizedBy', date: 'AuthorizedDate' },
+  Rejected: { by: 'RejectedBy', date: 'RejectedDate' }
+};
+
+// Called right after advanceRequestStage/updateLineItemAmount succeeds, so
+// the next loadJoinedRequests_() call (from the cache, not a refetch)
+// reflects the just-made change. Only patches what the client already knows
+// for certain (the new Status and, for a stage advance, the acting
+// approver's name/today's date) — Remarks and CreditingDate are left as-is
+// and simply catch up whenever the CSV cache is genuinely refreshed later
+// (e.g. next full page load), a minor, temporary cosmetic gap rather than
+// the reported "doesn't disappear at all" bug.
+function patchCachedRequestStage_(requestId, targetStage, actorName) {
+  if (!requestsCsvCache) return;
+  var row = requestsCsvCache.filter(function (r) { return String(r.RequestID) === String(requestId); })[0];
+  if (!row) return;
+  row.Status = targetStage;
+  var fieldNames = STAGE_FIELD_NAMES_CLIENT[targetStage];
+  if (fieldNames) {
+    row[fieldNames.by] = actorName;
+    row[fieldNames.date] = new Date().toISOString();
+  }
+}
+
+// Called right after updateLineItemAmount succeeds — patches the specific
+// line's Amount and recomputes the request's TotalAmount from scratch (not
+// a delta, matching the server's own re-sum-everything approach), same
+// reasoning as patchCachedRequestStage_ above.
+function patchCachedLineAmount_(requestId, lineId, newAmount) {
+  if (!requestLinesCsvCache || !requestsCsvCache) return;
+  var line = requestLinesCsvCache.filter(function (l) { return String(l.LineID) === String(lineId); })[0];
+  if (line) line.Amount = newAmount;
+
+  var req = requestsCsvCache.filter(function (r) { return String(r.RequestID) === String(requestId); })[0];
+  if (req) {
+    var total = 0;
+    requestLinesCsvCache.forEach(function (l) {
+      if (String(l.RequestID) === String(requestId)) total += Number(l.Amount) || 0;
+    });
+    req.TotalAmount = total;
+  }
+}
+
+// Called right after submitLiquidationRequest succeeds — inserts a synthetic
+// Pending row (+ its lines) into the CSV-based cache so the new request
+// shows up in My Requests immediately, instead of waiting on Google's
+// publish-to-web refresh. Ensures the cache is actually loaded first (via
+// loadJoinedRequests_, cheap/idempotent thanks to its own caching) before
+// appending, so this also correctly handles the case where My Requests
+// hasn't been opened yet this session (cache still null) — appending to a
+// null cache would otherwise silently drop the employee's real other
+// requests once the real fetch did happen. ReceiptFileURL is left blank for
+// a freshly-uploaded photo (the real Drive URL isn't known until the CSV
+// catches up) — a minor, temporary cosmetic gap, not a functional block.
+function patchCachedNewRequest_(requestId, employeeId, employeeName, lines) {
+  return loadJoinedRequests_().then(function () {
+    var totalAmount = 0;
+    var lineRows = lines.map(function (line, i) {
+      var amount = Number(line.amount) || 0;
+      totalAmount += amount;
+      return {
+        LineID: requestId + '-L' + (i + 1),
+        RequestID: requestId,
+        Date: line.date,
+        Category: line.category,
+        BaseLocation: line.baseLocation,
+        Amount: amount,
+        Description: line.description,
+        ReceiptFileURL: line.receiptUrl || '',
+        GpsMapLink: line.gpsMapLink || '',
+        CutoffEndDate: line.cutoffEndDate || ''
+      };
+    });
+
+    requestLinesCsvCache = requestLinesCsvCache.concat(lineRows);
+    requestsCsvCache = requestsCsvCache.concat([{
+      RequestID: requestId,
+      EmployeeID: employeeId,
+      EmployeeName: employeeName,
+      DateSubmitted: new Date().toISOString(),
+      Status: 'Pending',
+      TotalAmount: totalAmount,
+      Remarks: ''
+    }]);
+  });
+}
+
+// ---- Employees (CSV-based login lookup) — read-only speed path for the
+// Biometric ID login screen, replacing a live getEmployeeByID Apps Script
+// round trip. Mirrors EmployeeService.gs's getEmployeeByID exactly (same
+// error strings, same Active gate) except Active arrives as the CSV text
+// "TRUE"/"FALSE" rather than a real Sheets boolean.
+var employeesCsvCache = null;
+
+function loadEmployeesCsv_() {
+  if (employeesCsvCache) return Promise.resolve(employeesCsvCache);
+  return fetch(EMPLOYEES_CSV_URL)
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      employeesCsvCache = csvToObjects_(parseCsv_(text));
+      return employeesCsvCache;
+    });
+}
+
+function lookupEmployeeFromCsv_(employeeId) {
+  if (!employeeId) {
+    return Promise.resolve({ found: false, error: 'Biometric ID no. is required.' });
+  }
+  return loadEmployeesCsv_().then(function (rows) {
+    var match = rows.filter(function (row) {
+      return String(row.EmployeeID) === String(employeeId);
+    })[0];
+
+    if (!match) {
+      return { found: false, error: 'Biometric ID no. not found.' };
+    }
+    if (String(match.Active).trim().toUpperCase() !== 'TRUE') {
+      return { found: false, error: 'This Biometric ID no. is inactive.' };
+    }
+
+    return {
+      found: true,
+      employee: {
+        EmployeeID: match.EmployeeID,
+        Name: match.Name,
+        Department: match.Department,
+        BaseLocation: match.BaseLocation
+      }
+    };
+  });
+}
+
 function readFileAsBase64(file) {
   return new Promise(function (resolve, reject) {
     var reader = new FileReader();
@@ -321,6 +666,29 @@ function readFileAsBase64(file) {
 // (Apps Script has no way to answer an OPTIONS request).
 var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForPayroll', 'searchEmployeesForUtility'];
 
+// Apps Script's POST/GET flow answers with a 302 to a one-time
+// script.googleusercontent.com "echo" content URL — that hop intermittently
+// 404s right after a fresh deploy or a cold start (confirmed transient: the
+// exact same call always succeeds on an immediate retry, both via curl/node
+// and manually re-clicking in the browser). Rather than surfacing that as a
+// user-facing error, retry the whole call once, silently, before giving up.
+function fetchJsonWithRetry_(url, options, attemptsLeft) {
+  if (attemptsLeft === undefined) attemptsLeft = 2;
+  return fetch(url, options)
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      try {
+        return JSON.parse(text);
+      } catch (parseErr) {
+        if (attemptsLeft > 1) {
+          return new Promise(function (resolve) { setTimeout(resolve, 400); })
+            .then(function () { return fetchJsonWithRetry_(url, options, attemptsLeft - 1); });
+        }
+        throw new Error('Server returned an unexpected response — please try again.');
+      }
+    });
+}
+
 function runServer(functionName) {
   var args = Array.prototype.slice.call(arguments, 1);
 
@@ -328,15 +696,14 @@ function runServer(functionName) {
     var params = new URLSearchParams();
     params.set('action', functionName);
     args.forEach(function (arg, i) { params.set('arg' + i, arg); });
-    return fetch(APPS_SCRIPT_URL + '?' + params.toString())
-      .then(function (res) { return res.json(); });
+    return fetchJsonWithRetry_(APPS_SCRIPT_URL + '?' + params.toString());
   }
 
-  return fetch(APPS_SCRIPT_URL, {
+  return fetchJsonWithRetry_(APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: functionName, args: args })
-  }).then(function (res) { return res.json(); });
+  });
 }
 
 // ---- View toggling (index.html only: login vs employee-main) ----
@@ -416,8 +783,18 @@ function wireImageZoomPan_(img, pane) {
   }
 
   function applyTransform() {
-    var maxOffsetX = Math.max(0, (img.offsetWidth * scale - pane.clientWidth) / 2);
-    var maxOffsetY = Math.max(0, (img.offsetHeight * scale - pane.clientHeight) / 2);
+    // img.offsetWidth/Height are the element's un-rotated layout-box size —
+    // CSS rotate() never changes them, only visual rendering. At 90/270deg
+    // the on-screen bounding box has width/height swapped versus that layout
+    // box, so the pan clamp must swap them too or part of the image becomes
+    // permanently unreachable (the edges-cut-off bug). At 0/180deg nothing
+    // swaps, so this is a no-op there.
+    var rotated90 = (rotation === 90 || rotation === 270);
+    var effectiveWidth = rotated90 ? img.offsetHeight : img.offsetWidth;
+    var effectiveHeight = rotated90 ? img.offsetWidth : img.offsetHeight;
+
+    var maxOffsetX = Math.max(0, (effectiveWidth * scale - pane.clientWidth) / 2);
+    var maxOffsetY = Math.max(0, (effectiveHeight * scale - pane.clientHeight) / 2);
     translateX = clamp(translateX, -maxOffsetX, maxOffsetX);
     translateY = clamp(translateY, -maxOffsetY, maxOffsetY);
     // rotate() stays right-most/inner-most so it spins the image around its
@@ -581,12 +958,15 @@ function openLineItemPreview_(line, options) {
       '<div class="receipt-modal-placeholder">' + RECEIPT_PLACEHOLDER_ICON + '<p>No receipt uploaded.</p></div>';
   }
 
-  var amountHtml = options.editable
+  var isTimesheet = line.Category === 'Timesheet';
+  var editableNow = options.editable && !isTimesheet;
+
+  var amountHtml = editableNow
     ? '<div class="receipt-modal-amount-edit">' +
       '<input type="number" step="0.01" min="0.01" class="receipt-modal-amount-input" value="' + Number(line.Amount).toFixed(2) + '">' +
       '<button type="button" class="btn btn-primary btn-small receipt-modal-save-btn" disabled>Save Amount</button>' +
       '</div>'
-    : formatCurrency(line.Amount);
+    : formatLineAmountDisplay_(line);
 
   var gpsRowHtml = line.GpsMapLink
     ? '<div class="receipt-modal-row"><span class="rm-label">GPS Location</span><span class="rm-value">' +
@@ -595,15 +975,16 @@ function openLineItemPreview_(line, options) {
 
   detailsPane.innerHTML =
     '<h3>Line item details</h3>' +
-    '<div class="receipt-modal-row"><span class="rm-label">Date</span><span class="rm-value">' + escapeHtml_(formatDateDisplay(line.Date)) + '</span></div>' +
+    '<div class="receipt-modal-row"><span class="rm-label">Date</span><span class="rm-value">' + escapeHtml_(formatLineDateDisplay_(line)) + '</span></div>' +
     '<div class="receipt-modal-row"><span class="rm-label">Category</span><span class="rm-value">' + escapeHtml_(line.Category) + '</span></div>' +
-    '<div class="receipt-modal-row"><span class="rm-label">Location</span><span class="rm-value">' + escapeHtml_(line.BaseLocation) + '</span></div>' +
-    '<div class="receipt-modal-row"><span class="rm-label">Description</span><span class="rm-value">' + escapeHtml_(line.Description) + '</span></div>' +
+    (isTimesheet ? '' :
+      '<div class="receipt-modal-row"><span class="rm-label">Location</span><span class="rm-value">' + escapeHtml_(line.BaseLocation) + '</span></div>' +
+      '<div class="receipt-modal-row"><span class="rm-label">Description</span><span class="rm-value">' + escapeHtml_(line.Description) + '</span></div>') +
     '<div class="receipt-modal-row"><span class="rm-label">Amount</span><span class="rm-value">' + amountHtml + '</span></div>' +
     gpsRowHtml +
     '<div class="msg msg-error hidden receipt-modal-error" role="alert"></div>';
 
-  if (options.editable) {
+  if (editableNow) {
     var input = detailsPane.querySelector('.receipt-modal-amount-input');
     var saveBtn = detailsPane.querySelector('.receipt-modal-save-btn');
     var errorEl = detailsPane.querySelector('.receipt-modal-error');

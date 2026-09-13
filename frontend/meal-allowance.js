@@ -19,8 +19,11 @@ var maLastSavedLineItem = null; // set after a successful save, consumed by "Add
 // personal override: it only applies when they're actually near their own
 // assigned store, not just because it happened to be the nearest reference
 // row from far away. Real attendance GPS has shown drift up to ~4.5km even
-// for confirmed correct visits, so this is intentionally generous.
-var MA_ASSIGNED_OVERRIDE_RADIUS_METERS = 1500;
+// for confirmed correct visits (and the reference sheet's own coordinates can
+// be off by a similar margin from the real store location — confirmed via a
+// live case: BIO 470/Walter Punsalan at "R. Antique", ~2.24km reference-vs-
+// real drift), so this is intentionally generous.
+var MA_ASSIGNED_OVERRIDE_RADIUS_METERS = 5000;
 
 function initMealAllowanceUtility() {
   $('tab-utilities').addEventListener('click', function () {
@@ -222,7 +225,7 @@ function maResolveRegularAllowance_(endRec, regionStore) {
   return matched || { amount: regionAmount, source: 'RegularBracket' };
 }
 
-var MA_EVENING_START_HOUR = 18; // 6:00 PM
+var MA_EVENING_START_HOUR = 22; // 10:00 PM
 var MA_MIDNIGHT_WINDOW_END_HOUR = 6; // 6:00 AM the next day
 
 // Whether Midnight Allowance is even possible for this duty session — checked

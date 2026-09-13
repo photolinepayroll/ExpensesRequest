@@ -128,6 +128,169 @@ An internal Payroll tool: employees submit expense liquidation requests (Fare, M
     - **Verification performed** (final task, no real browser available in this environment): confirmed the deployed `/exec` URL (deployment `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`) is live at version `@29`; `node --check frontend/admin.js` passes; re-read `buildExportReportHtml_`/`handleExportClick_`/`csvField_`/`buildExportCsv_` end-to-end in the current file to confirm correct wiring; wrote and ran a fresh jsdom end-to-end test (loads `common.js`+`admin.js` into a real jsdom DOM, mocks `runServer` with deferred promises, clicks `#btn-export`) that confirmed `window.open` fires synchronously before the mocked data resolves (asserted via call-order tracking), a placeholder is written first and the real report second, the report HTML contains a receipt `<img>` for lines with a `ReceiptFileURL`, the missing-receipt note for a line without one, and the correct "Disbursed"/"Reviewed" labels — all checks passed. Also hit the live `/exec` URL directly with `curl` for both `getAllRequestsForPayroll('Reviewed')` (returned real joined request+line data) and `('Authorized')` (returned `[]` — no currently-disbursed requests, a valid empty result, not an error).
     - **Genuinely NOT verified — flagged for the user to check personally**: real-browser popup-blocker behavior (Safari/Firefox specifically), the actual print-preview visual appearance and pagination when printing/saving as PDF, and clicking the actual Export button in a real browser session end-to-end.
 
+20. Same session, several more real-data-driven corrections and two new features, planned via
+    plan mode with clarifying questions each time (no written spec docs this round — plans
+    lived in Claude's plan-mode file, summarized here instead):
+    - **Export UI split + print-report layout**: the single "Export Reviewed/Disbursed" button
+      (item 19) was split into two independent buttons — "Export CSV" and "Print Preview" —
+      each doing its own fetch (`admin.js`'s `fetchExportableRequests_`/`handleExportCsvClick_`/
+      `handleExportReportClick_`). The print-preview report's receipt layout changed from one
+      receipt per page to bucketed pages: Fare/Accommodation get 2-per-page (stacked, legible
+      full-size), Meal Allowance gets 6-per-page in a 2x3 grid — explicit
+      `@page { size: letter portrait; }` added since none existed before.
+    - **Photo rotation added** to the shared receipt preview modal (`common.js`'s
+      `wireImageZoomPan_` now returns `{rotateLeft, rotateRight}`, 90° increments, composes
+      with existing zoom/pan via `transform: translate() scale() rotate()` — rotate is
+      right-most/inner-most so it doesn't change what "horizontal"/"vertical" mean for pan).
+    - **Real, confirmed data bug found and fixed**: `STORE_COORDINATES_CSV_URL`'s published
+      sheet has duplicate column headers (`"BIO ID"` and `"REGULAR (AUDIT/TEC/STAFF)"` each
+      appear twice — once for real per-store data, once for an unrelated "Technical Staff
+      Roster" sub-table crammed into the same sheet). `common.js`'s old header-keyed
+      `csvToObjects_` silently used the wrong (roster) column for every row, which was making
+      the plain regional-bracket Regular Meal Allowance compute to ₱0 for ordinary Staff
+      employees — confirmed live via a real report (Jan Marnelle Insigne, BIO 863, showing
+      ₱0.00 at SM Aura instead of the correct ₱100 NCR bracket). Fixed with a new
+      `parseStoreCoordinatesCsv_` in `common.js` that restores the two affected fields by
+      fixed column index (2 and 3), used by both `meal-allowance.js` and a new Mother-Branch
+      lookup in `employee.js`.
+    - **Meal Allowance "own store" rule corrected**: previously any duty within 1.5km of ANY
+      store where the employee was listed as assigned Tech/Area Head paid ₱0 (wrong — this
+      was this session's own earlier, since-corrected fix). The sheet already encodes which
+      *specific* assigned store is the employee's true home branch via the literal text
+      `"MOTHER BRANCH"` in that row's amount cell (confirmed live: BIO 373/Cacho has a real
+      ₱150 rate at Harbor Point, a store they cover, but `"MOTHER BRANCH"` text at SM Tarlac,
+      their actual home) — `maResolveRegularAllowance_` now pays ₱0 only at the row literally
+      marked that way, and the real override amount at any other assigned/covered store.
+      `employee.js`'s identity-card "Mother Branch" display now also checks this same marker
+      (via a new `resolveMotherBranchFromCoordinates_`) and prefers it over the separately-
+      maintained `STORE_DIRECTORY_CSV_URL` sheet when the two disagree.
+    - **Meal Allowance midnight-crossing duty support**: `#ma-duty-date` gained a "crosses
+      midnight" checkbox that reveals a second date field, so a Start IN/End OUT pair spanning
+      two calendar days can be found (`maHandleLoadAttendance_` previously hard-filtered to one
+      date, silently excluding any End OUT record dated the next day). Midnight Allowance's
+      manual input is now only shown when End OUT falls in the 6:00 PM–6:00 AM window
+      (`maIsInEveningToMidnightWindow_`) instead of always being available regardless of time.
+    - **GPS audit link added**: every saved Meal Allowance record now includes a Google Maps
+      link built from the End OUT record's own coordinates (new `EndGpsMapLink` column,
+      `MealAllowanceService.gs`/`Setup.gs`), and the same link travels into the actual
+      liquidation request when handed off via "Add to New Request" (new `GpsMapLink` column on
+      `RequestLines`, `RequestService.gs`/`Setup.gs`) — shown as a "View GPS Map Link" link next
+      to "View attendance photo" on the New Request row, and as a "GPS Location: View Map" row
+      in the shared receipt preview modal, so it's visible to the employee AND every approval
+      role reviewing the request (not just buried in the internal payroll log). An earlier
+      attempt appended the raw URL as text inside the Description field — corrected after the
+      user flagged it as awkward/wrong; the link is now a proper field, not description text.
+    - All backend changes in this item were pushed and deployed (`clasp push -f` +
+      `clasp deploy -i`) and confirmed live; `setupSheets()` was re-run twice (once for
+      `MealAllowances.EndGpsMapLink`, once for `RequestLines.GpsMapLink`) and confirmed by the
+      user with a real saved entry showing a populated, clickable map link.
+    - Work committed in two commits: `f8cbc17` (export split/layout/rotation + Meal Allowance
+      data fixes + midnight-crossing support) and `3713bfc` (GPS link moved from Description
+      text to a proper field).
+
+**Two more changes were planned (via plan mode, full plan preserved at
+`C:\Users\Gilbert\.claude\plans\update-plan-separate-the-lexical-riddle.md` on this machine)
+and are mid-implementation when this session ended — see CLAUDE.md's "Planned work" section
+for the exact done/not-done breakdown, summarized here:**
+- **Zoom/pan edge-visibility fix — DONE, uncommitted.** Root cause: `wireImageZoomPan_`'s pan
+  clamp used the image's un-rotated `offsetWidth`/`offsetHeight` even at 90°/270° rotation,
+  where the rendered bounding box has them swapped — permanently hiding part of a rotated
+  image from panning. Fixed in `common.js`'s `applyTransform()` (swaps effective width/height
+  when `rotation` is 90 or 270 before computing the clamp). Confirmed via first-principles
+  re-derivation that 0°/180° has no separate bug. No further work needed on this item.
+- **New "Timesheet" category — partially done, uncommitted, NOT deployed.** A manually-
+  selectable category (unlike Meal Allowance, injected only via hand-off) for attaching a
+  reference timesheet photo used by reviewers to cross-check a request's other lines: no
+  Amount/Location/Description, a Cut-off date range instead of one date, receipt still
+  required. Backend (`Config.gs`, `Setup.gs`, `RequestService.gs`, `Validation.gs`) and the
+  `frontend/index.html` template markup are done locally but **not pushed/deployed** and
+  **`setupSheets()` has not been re-run** (so `CutoffEndDate` doesn't exist on the live
+  `RequestLines` sheet yet). Still to do: `frontend/employee.js` (the `applyCategoryLayout_`
+  helper and its wiring into `addLineItemRow()`/`collectLineItems()`/
+  `validateRequiredLineFields_()`), `frontend/common.js` (`formatLineDateDisplay_`/
+  `formatLineAmountDisplay_` helpers, `buildLineItemsHtml_` and receipt-modal display
+  updates), `frontend/admin.js` (CSV export column, print-report caption fix). Resume by
+  editing `frontend/employee.js` next, per the plan file's exact code.
+
+21. Resumed the session after a usage-limit interruption and finished both items left
+    mid-implementation in item 20 (per `CLAUDE.md`'s "Recently completed" section and the plan
+    file `C:\Users\Gilbert\.claude\plans\update-plan-separate-the-lexical-riddle.md`):
+    - Zoom/pan fix was already done and committed to the working tree from the prior session —
+      no further work needed.
+    - Finished the Timesheet category's frontend wiring exactly per the plan:
+      `frontend/employee.js` (`LINE_ITEM_FIELDS`, `applyCategoryLayout_`, `addLineItemRow()`,
+      `collectLineItems()`, `validateRequiredLineFields_()`), `frontend/common.js`
+      (`formatLineDateDisplay_`/`formatLineAmountDisplay_`, `buildLineItemsHtml_`, the receipt
+      modal's details pane), and `frontend/admin.js` (`EXPORT_CSV_HEADERS`/`buildExportCsv_`,
+      `buildExportReportHtml_`'s caption logic). All backend pieces (`Config.gs`, `Setup.gs`,
+      `RequestService.gs`, `Validation.gs`) and `frontend/index.html`'s template were already
+      done from the prior session and needed no changes.
+    - `node --check` passed on all three touched frontend files.
+    - Pushed and deployed live (`clasp push -f` then `clasp deploy -i` against deployment
+      `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`, now at
+      version `@32`); confirmed live via `curl` against `getAllRequestsForPayroll`.
+    - **Still needed, not done this session**: re-run `setupSheets()` from the Apps Script
+      editor to materialize the `CutoffEndDate` column on the live `RequestLines` sheet (a
+      real Timesheet submission will fail/misbehave until then), and a real-browser
+      end-to-end test of the whole Timesheet flow (add line → toggle category → submit →
+      view in My Requests/admin queue/receipt modal/CSV export/print-preview report) — nothing
+      in this session touched a real browser.
+
+22. Same day, the user actually started testing in a real browser and immediately hit a
+    recurring "Unexpected token '<'" / "Login failed" / "Export failed" error on nearly every
+    action (Biometric ID lookup, Approver login, the Pending queue, Export). Root-caused
+    (confirmed via live `curl`/Node tests, not guessed): Apps Script's GET/POST flow always
+    redirects to a one-time `script.googleusercontent.com` content URL, and that hop
+    intermittently 404s — transient, since the exact same call reliably succeeds on an
+    immediate retry. Two fixes, both planned via plan mode with the user's explicit sign-off on
+    every trade-off (publishing 3 more sheets to CSV, accepted staleness, accepted duplicated
+    routing logic) — see `CLAUDE.md`'s new "CSV-based read paths..." section for the full
+    technical writeup, summarized here:
+    - **Moved 3 read-only, high-frequency lookups off Apps Script onto the same
+      published-CSV-parsed-client-side pattern** already used for the attendance/store
+      reference sheets: Employees (Biometric ID login), and Requests+RequestLines (My Requests,
+      the Approver queue, and CSV/print-preview export) — new
+      `EMPLOYEES_CSV_URL`/`REQUESTS_CSV_URL`/`REQUEST_LINES_CSV_URL` in `frontend/config.js`,
+      published by the user mid-session. The Approver queue's Pending-only routing scope was
+      ported client-side too (`common.js`'s new `resolveRequiredApprover_`, plus
+      `resolveEmployeeCategory_`/`STORE_DIR_COL_*` moved there from `employee.js` so `admin.js`
+      can reuse them) — verified by running the exact routing simulation in Node against the
+      live published CSVs and confirming an exact match against live `getAllRequestsForPayroll`
+      results for two real accounts (Jayriel/783, Cris/33) before considering it done. All
+      mutations (`submitLiquidationRequest`, `advanceRequestStage`, `updateLineItemAmount`,
+      `loginApprover`, `saveMealAllowanceRecord`) deliberately untouched — still Apps Script.
+    - **Added a silent auto-retry** (`common.js`'s `fetchJsonWithRetry_`, wired into the one
+      shared `runServer()`) for the mutations that do still hit the flaky echo-redirect —
+      retries once after 400ms before surfacing an error, covering all 5 remaining mutations
+      automatically since they all go through `runServer()`.
+    - The user explicitly asked whether the *Approvers* sheet (which holds plaintext passwords)
+      could also move to CSV for the same speed/reliability reason — **declined**, since
+      publishing it would make every Approver's password fetchable by anyone with the link, a
+      real new exposure (unlike Employees/Requests, which are no more exposed via CSV than they
+      already are via the existing open, unauthenticated API).
+    - **Found and fixed a real bug this change introduced**: `requestsCsvCache`/
+      `requestLinesCsvCache`/`employeesCsvCache` are fetched once and cached for the whole page
+      session — so without something to bridge the gap, an Approve/Reject/Amount-edit/new
+      submission would succeed on the server but never disappear/appear in the list until a full
+      page reload (worse than the pre-existing "CSV can lag a few minutes" trade-off the user had
+      already accepted for page-load speed — this was "never updates at all this session," caught
+      when the user reported "pending approve/reject dapat mawawala, unless refresh"). Fixed with
+      optimistic client-side cache patching right after each mutation's success response —
+      `common.js`'s `patchCachedRequestStage_` (Approve/Reject), `patchCachedLineAmount_` (Save
+      Amount), and `patchCachedNewRequest_` (new submission, called from `employee.js`'s
+      `handleSubmitRequest` right before switching to My Requests). All three verified directly
+      in Node against the real cached CSV data — confirmed a patched request's Status changes
+      immediately and disappears from a Pending-filtered list, and a synthetic new request
+      appears correctly alongside an employee's real existing ones without disturbing them.
+    - Also converted `admin.js`'s Export CSV/Print Preview (`fetchExportableRequests_`) to the
+      same CSV-based `loadJoinedRequests_` path — it's read-only and never Pending-scoped, so no
+      extra routing logic was needed there.
+    - **Not yet done**: none of this session's frontend changes have been committed to git (the
+      backend/Timesheet changes from item 21 were already pushed/deployed, but nothing from item
+      22 touches the backend — it's 100% frontend, no push/deploy/setupSheets() needed). Also
+      still outstanding from item 21: `setupSheets()` re-run for `CutoffEndDate`, and a full
+      real-browser Timesheet end-to-end pass.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

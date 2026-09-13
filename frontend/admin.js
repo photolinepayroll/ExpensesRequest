@@ -81,16 +81,45 @@ function loadAdminRequests() {
   var statusFilter = $('admin-status-filter').value;
 
   // Only Approver-role accounts have their Pending view scoped to what this
-  // specific person is actually meant to approve (mirrors the server's
-  // category-based routing) — Reviewer/Authorizer queues stay unscoped, so
-  // don't send a Biometric ID for those roles at all.
-  var args = ['getAllRequestsForPayroll', statusFilter];
-  if (currentApprover.role === 'Approver' && currentApprover.biometricId) {
-    args.push(currentApprover.biometricId);
-  }
+  // specific person is actually meant to approve (a client-side mirror of the
+  // server's category-based routing, common.js's resolveRequiredApprover_ —
+  // display/filtering only; advanceRequestStage/updateLineItemAmount
+  // independently re-verify the same routing server-side on every call, so a
+  // mismatch here can only ever show the wrong list, never approve anything
+  // illegitimately). Reviewer/Authorizer queues stay unscoped, same as the
+  // server. This reads from the CSV-based joined list (loadJoinedRequests_)
+  // instead of a live getAllRequestsForPayroll call — can lag a few minutes
+  // behind the live sheet, an accepted trade-off for this read path.
+  var scopeToApprover = currentApprover.role === 'Approver' && currentApprover.biometricId;
 
-  runServer.apply(null, args)
-    .then(function (requests) {
+  Promise.all([
+    loadJoinedRequests_(),
+    scopeToApprover ? loadStoreDirectory_() : Promise.resolve(null),
+    scopeToApprover ? loadEmployeesCsv_() : Promise.resolve(null)
+  ])
+    .then(function (results) {
+      var allRequests = results[0];
+      var directoryRows = results[1];
+      var employeeRows = results[2];
+
+      var requests = allRequests.filter(function (req) {
+        if (statusFilter && statusFilter !== 'All' && req.Status !== statusFilter) return false;
+
+        if (req.Status === 'Pending' && scopeToApprover) {
+          var emp = employeeRows.filter(function (e) { return String(e.EmployeeID) === String(req.EmployeeID); })[0];
+          var lineLocation = (req.lines && req.lines[0]) ? req.lines[0].BaseLocation : '';
+          var routing = resolveRequiredApprover_(
+            directoryRows, req.EmployeeID,
+            emp ? emp.BaseLocation : '', emp ? emp.Department : '',
+            lineLocation
+          );
+          // Fail open (routing.found === false) shows the request to
+          // everyone, same fallback philosophy as the server.
+          if (routing.found && String(routing.bioId) !== String(currentApprover.biometricId)) return false;
+        }
+        return true;
+      });
+
       renderRequestsTable(container, requests, {
         showEmployee: true,
         isLineEditable: isLineEditableForCurrentApprover_,
@@ -160,6 +189,7 @@ function saveLineItemAmount_(request, line, newAmount) {
         currentApprover.password = null; // can't tell if the password was the problem — re-prompt next time
         throw new Error(result.error);
       }
+      patchCachedLineAmount_(request.RequestID, line.LineID, newAmount);
       loadAdminRequests(); // refreshes the Total column + audit trail for this request
       return result;
     });
@@ -221,6 +251,7 @@ function wireAdminActions_(panel, requestId, nextAction) {
           reEnable();
           return;
         }
+        patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
         loadAdminRequests();
       })
       .catch(function (err) {
@@ -249,7 +280,7 @@ var EXPORT_CSV_HEADERS = [
   'RequestID', 'EmployeeID', 'EmployeeName', 'Status', 'SubmittedDate',
   'ApprovedBy', 'ApprovedDate', 'ReviewedBy', 'ReviewedDate',
   'AuthorizedBy', 'AuthorizedDate', 'CreditingDate',
-  'LineDate', 'Category', 'Amount', 'BaseLocation', 'ReceiptURL', 'Remarks'
+  'LineDate', 'CutoffEndDate', 'Category', 'Amount', 'BaseLocation', 'ReceiptURL', 'Remarks'
 ];
 
 // One row per line item (not per request) — a request with 3 lines produces
@@ -263,7 +294,7 @@ function buildExportCsv_(requests) {
         req.RequestID, req.EmployeeID, req.EmployeeName, statusLabel, req.DateSubmitted,
         req.ApprovedBy, req.ApprovedDate, req.ReviewedBy, req.ReviewedDate,
         req.AuthorizedBy, req.AuthorizedDate, req.CreditingDate,
-        line.Date, line.Category, line.Amount, line.BaseLocation, line.ReceiptFileURL, req.Remarks
+        line.Date, line.CutoffEndDate || '', line.Category, line.Amount, line.BaseLocation, line.ReceiptFileURL, req.Remarks
       ].map(csvField_).join(','));
     });
   });
@@ -315,14 +346,18 @@ function buildExportReportHtml_(requests) {
     (req.lines || []).forEach(function (line) {
       if (!line.ReceiptFileURL) {
         missing.push(req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-          formatDateDisplay(line.Date) + ' — ' + line.Category + ' (No receipt on file)');
+          formatLineDateDisplay_(line) + ' — ' + line.Category + ' (No receipt on file)');
         return;
       }
+      var amountCaption = line.Category === 'Timesheet' ? '' : (' — ' + formatCurrency(line.Amount));
       var item = {
         caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-          formatDateDisplay(line.Date) + ' — ' + line.Category + ' — ' + formatCurrency(line.Amount),
+          formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
         url: driveThumbnailUrl_(line.ReceiptFileURL)
       };
+      // Timesheet receipts stay in the 2-per-page fareItems bucket — a
+      // full-page reference document suits that legible layout better than
+      // the 6-up grid meant for small allowance slips.
       (line.Category === 'Meal Allowance' ? mealItems : fareItems).push(item);
     });
   });
@@ -408,16 +443,15 @@ function initExportButtons_() {
   $('btn-export-report').addEventListener('click', handleExportReportClick_);
 }
 
+// CSV-based read path (see loadJoinedRequests_ in common.js) instead of a
+// live getAllRequestsForPayroll call — Reviewed/Authorized are never
+// Pending-routing-scoped anyway (same as the server), so no client-side
+// scoping logic is needed here, just a plain status filter.
 function fetchExportableRequests_() {
-  return Promise.all([
-    runServer('getAllRequestsForPayroll', 'Reviewed'),
-    runServer('getAllRequestsForPayroll', 'Authorized')
-  ]).then(function (results) {
-    if (!Array.isArray(results[0]) || !Array.isArray(results[1])) {
-      var failed = !Array.isArray(results[0]) ? results[0] : results[1];
-      throw new Error(failed && failed.error ? failed.error : 'Failed to load requests.');
-    }
-    return results[0].concat(results[1]);
+  return loadJoinedRequests_().then(function (all) {
+    return all.filter(function (req) {
+      return req.Status === 'Reviewed' || req.Status === 'Authorized';
+    });
   });
 }
 

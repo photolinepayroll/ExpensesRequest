@@ -46,7 +46,8 @@ function submitLiquidationRequest(payload) {
         Amount: amount,
         Description: line.description,
         ReceiptFileURL: receiptUrl,
-        GpsMapLink: line.gpsMapLink || ''
+        GpsMapLink: line.gpsMapLink || '',
+        CutoffEndDate: line.cutoffEndDate || ''
       });
     });
 

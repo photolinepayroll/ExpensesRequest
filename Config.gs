@@ -12,7 +12,7 @@ var SHEET_REQUEST_LINES = 'RequestLines';
 var SHEET_APPROVERS = 'Approvers';
 var SHEET_MEAL_ALLOWANCES = 'MealAllowances';
 
-var CATEGORIES = ['Fare', 'Meal Allowance', 'Accommodation'];
+var CATEGORIES = ['Fare', 'Meal Allowance', 'Accommodation', 'Timesheet'];
 
 var STATUS_PENDING = 'Pending';
 var STATUS_APPROVED = 'Approved';

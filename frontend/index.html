@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Expense Liquidation Request</title>
+  <link rel="icon" href="logo.png">
   <base target="_top">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -155,25 +156,30 @@
           <label class="li-date-label">Date</label>
           <input type="date" class="li-date">
         </div>
+        <div class="field li-cutoff-end-field hidden">
+          <label class="li-cutoffEndDate-label">Cut-off End Date</label>
+          <input type="date" class="li-cutoffEndDate">
+        </div>
         <div class="field">
           <label class="li-category-label">Category</label>
           <select class="li-category">
             <option value="Fare">Fare</option>
             <option value="Accommodation">Accommodation</option>
+            <option value="Timesheet">Timesheet</option>
           </select>
         </div>
-        <div class="field">
+        <div class="field li-location-field">
           <label class="li-location-label">Base Location</label>
           <div class="autocomplete-wrap">
             <input type="text" class="li-location" placeholder="e.g. Manila Office" autocomplete="off">
             <ul class="li-location-suggestions hidden"></ul>
           </div>
         </div>
-        <div class="field">
+        <div class="field li-amount-field">
           <label class="li-amount-label">Amount</label>
           <input type="number" class="li-amount" min="0" step="0.01" placeholder="0.00">
         </div>
-        <div class="field span-2">
+        <div class="field span-2 li-description-field">
           <label class="li-description-label">Description</label>
           <input type="text" class="li-description" placeholder="e.g. Taxi from airport to site">
         </div>

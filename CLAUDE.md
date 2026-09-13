@@ -56,6 +56,124 @@ This is **two independently deployed halves that only communicate over HTTP**, n
    - New Request's line-item form starts completely empty on login (no auto-added first line, no "Line N" badge on each card — both removed) — `resetLineItems()` just clears the container, and the remove button can now clear a card list down to zero.
    - There used to be a build step that inlined this same frontend source into Apps Script `HtmlService` templates (`Index.html`, `CSS.html`, `JS_*.html`) so Apps Script served the UI directly. That approach was abandoned in favor of the current fully-decoupled static-site-calls-JSON-API design; if you see references to `build.js` or those generated `.html` partials in history, they're obsolete — do not resurrect that pattern without instruction.
 
+## Recently completed (verify in a real browser before considering fully done)
+
+Two changes from the plan at `resume.md` item 20 / `C:\Users\Gilbert\.claude\plans\update-plan-separate-the-lexical-riddle.md` are now fully implemented, pushed, and deployed (deployment `@32`):
+
+1. **Zoom/pan edge-visibility fix — DONE.** `common.js`'s `wireImageZoomPan_`'s
+   `applyTransform()` swaps effective width/height at 90°/270° rotation before computing
+   the pan clamp (the un-rotated `img.offsetWidth`/`offsetHeight` were previously used even
+   when the rendered bounding box had them swapped, permanently hiding part of a rotated
+   image from panning).
+2. **New "Timesheet" category — DONE, code-complete end to end.** A manually-selectable
+   category (unlike `Meal Allowance`, which is only ever injected via the Meal Allowance
+   utility hand-off) for attaching a reference timesheet photo a reviewer uses to cross-check
+   the request's other Fare/Accommodation/Meal Allowance lines. No Amount/Location/Description
+   (Amount forced to 0, contributing nothing to the request total); a Cut-off date range
+   (start + `CutoffEndDate`) instead of a single date; receipt photo still required, same
+   upload path, relabeled "Timesheet Photo".
+   - Backend: `Config.gs`'s `CATEGORIES` includes `'Timesheet'`; `Setup.gs`'s
+     `SHEET_REQUEST_LINES` header list includes `'CutoffEndDate'`; `RequestService.gs`'s
+     `submitLiquidationRequest` writes it; `Validation.gs`'s `validateSubmission_` branches by
+     category. Pushed and deployed to the live `/exec` URL (`clasp push -f` + `clasp deploy -i`).
+   - Frontend: `frontend/index.html`'s line-item template has the `Timesheet` `<option>`, a
+     hidden `.li-cutoff-end-field`, and wrapper classes on the fields that hide/show as units.
+     `frontend/employee.js` has `applyCategoryLayout_(row)` (wired to the category `<select>`'s
+     `change` event and called once on every freshly-added row) toggling
+     Location/Amount/Description visibility, forcing Amount to `0`/read-only, and relabeling
+     the file field; `collectLineItems()` sends `cutoffEndDate` and blanks
+     amount/baseLocation/description for Timesheet rows; `validateRequiredLineFields_()` skips
+     those three fields and requires the cut-off end date instead, for Timesheet rows only.
+     `frontend/common.js` has shared `formatLineDateDisplay_`/`formatLineAmountDisplay_`
+     helpers used by `buildLineItemsHtml_` and the receipt-modal details pane (suppresses the
+     Location/Description rows and the amount-edit control for Timesheet lines). `frontend/admin.js`
+     has `CutoffEndDate` in `EXPORT_CSV_HEADERS`/`buildExportCsv_`, and
+     `buildExportReportHtml_`'s caption logic drops the bogus "₱0.00" for Timesheet lines
+     (receipts still bucket into the existing 2-per-page `fareItems` layout, unchanged).
+   - **Still needed before calling this fully done**: `setupSheets()` must be re-run once from
+     the Apps Script editor to materialize `CutoffEndDate` on the live `RequestLines` sheet —
+     until then, a real Timesheet submission will fail or silently drop the column. Also
+     genuinely untested in a real browser: adding a Timesheet line and confirming the
+     field show/hide behavior, submitting one end-to-end, and checking its display in My
+     Requests / the admin queue / the receipt modal / CSV export / print-preview report.
+     `node --check` passes on all three touched frontend files.
+
+3. **CSV-based read paths for speed + resilience against Apps Script's transient "echo" 404 — DONE.**
+   Apps Script's GET/POST flow always redirects to a one-time `script.googleusercontent.com`
+   content URL, and that hop intermittently 404s (confirmed transient: the exact same call
+   always succeeds on an immediate retry, both via a live `curl`/Node test and by re-clicking in
+   the browser) — this was showing up as "Unexpected token '<'" / "Login failed" / "Export
+   failed" errors across the app. Two complementary fixes, both live:
+   - **Silent auto-retry** — `common.js`'s `runServer()` now goes through a new
+     `fetchJsonWithRetry_()` helper: if the response body isn't valid JSON (the 404's HTML page),
+     it waits 400ms and retries once before surfacing an error. This covers every remaining
+     Apps Script mutation in the app (`loginApprover`, `advanceRequestStage`,
+     `updateLineItemAmount`, `submitLiquidationRequest`, `saveMealAllowanceRecord`) automatically,
+     since they all go through the one shared `runServer()`.
+   - **Moved read-only, high-frequency lookups off Apps Script entirely**, onto the same
+     "published Google Sheet as CSV, parsed client-side" pattern already used for the 3
+     external reference sheets (attendance/store-coordinates/store-directory). Three more
+     sheets — **Employees, Requests, RequestLines** — are now also published to the web as CSV
+     (`frontend/config.js`'s `EMPLOYEES_CSV_URL`/`REQUESTS_CSV_URL`/`REQUEST_LINES_CSV_URL`).
+     Only mutations stay on Apps Script; nothing here changes `submitLiquidationRequest`,
+     `advanceRequestStage`, `updateLineItemAmount`, `loginApprover`, or `saveMealAllowanceRecord`.
+     - `common.js`'s `lookupEmployeeFromCsv_`/`loadEmployeesCsv_` replace the Biometric ID
+       login's `getEmployeeByID` call — same error strings, same `Active` gate (mirrored as the
+       CSV text `"TRUE"`, since a published sheet has no real boolean type).
+     - `common.js`'s `loadJoinedRequests_` is a client-side port of `RequestService.gs`'s
+       `buildRequestsWithLines_` (fetches+joins Requests+RequestLines, sorts newest-first) — used
+       by `employee.js`'s My Requests tab (filtered by own `EmployeeID`) and `admin.js`'s
+       Approver queue (filtered by status).
+     - The Approver queue's Pending-only routing scope (an Approver should only see requests
+       actually meant for them) is mirrored client-side too: `resolveEmployeeCategory_`/
+       `isTechnicalDepartment_`/`isAuditDepartment_`/`STORE_DIR_COL_*` were **moved** from
+       `employee.js` into `common.js` (so `admin.js` can reuse them — they used to live only in
+       `employee.js` for the Utilities-tab-visibility mirror), and a new `resolveRequiredApprover_`
+       in `common.js` ports `StoreDirectoryService.gs`'s function of the same name. This is a
+       **known, accepted duplication of routing logic across the language boundary** (on top of
+       the one that already existed) — safe under this app's existing philosophy because it's
+       *display/filtering only*: `advanceRequestStage`/`updateLineItemAmount` independently
+       re-verify routing server-side on every call regardless of what this shows, so a bug here
+       could only ever make an Approver's queue show the wrong list, never let anyone
+       illegitimately approve something the server would otherwise block. **Verified against
+       live data** (not just syntax): the client-side routing simulation was run in Node against
+       the real published CSVs and matched the live `getAllRequestsForPayroll` results exactly
+       for multiple real accounts (Jayriel/783, Cris/33) before this was considered done.
+     - `admin.js`'s Export CSV / Print Preview (`fetchExportableRequests_`) also switched from
+       two `getAllRequestsForPayroll` calls to the same `loadJoinedRequests_` + status filter —
+       it's read-only and never Pending-routing-scoped, so no extra logic was needed there.
+   - **Trade-off, explicitly accepted by the user**: a published-to-web CSV can lag a few
+     minutes behind the live sheet (Google's own refresh interval), and — critically —
+     `requestsCsvCache`/`requestLinesCsvCache`/`employeesCsvCache` are cached for the whole page
+     session and only ever fetched once. Without something to bridge that gap, a request you
+     just approved/rejected/amount-edited, or just submitted, would appear stuck/missing until a
+     full page reload. Fixed with **optimistic client-side cache patching**, applied right after
+     each mutation's success response (the server already confirmed the change; no need to wait
+     for the CSV to catch up to reflect it locally):
+     - `common.js`'s `patchCachedRequestStage_(requestId, targetStage, actorName)` — called from
+       `admin.js`'s Approve/Reject success handler. Mirrors `RequestService.gs`'s
+       `STAGE_FIELD_NAMES` (as `STAGE_FIELD_NAMES_CLIENT`) to patch the right `*By`/`*Date`
+       column pair alongside `Status`. `Remarks`/`CreditingDate` are deliberately left stale
+       until a genuine cache refresh (full page reload) — a minor, temporary cosmetic gap, not
+       the "doesn't disappear from the list" bug this was fixing.
+     - `common.js`'s `patchCachedLineAmount_(requestId, lineId, newAmount)` — called from
+       `admin.js`'s Save Amount success handler; patches the line's `Amount` and recomputes
+       `TotalAmount` by re-summing all of that request's lines (matching the server's own
+       from-scratch re-sum, not a delta).
+     - `common.js`'s `patchCachedNewRequest_(requestId, employeeId, employeeName, lines)` —
+       called from `employee.js`'s `handleSubmitRequest` success handler, right before switching
+       to the My Requests tab. Inserts a synthetic Pending row + line rows built from the exact
+       `lines` payload just submitted. First calls `loadJoinedRequests_()` itself (cheap/
+       idempotent, thanks to its own caching) to guarantee the cache is actually populated before
+       appending — appending onto a still-`null` cache would otherwise silently strand the
+       employee's *other*, already-real requests once the genuine fetch eventually happened.
+       `ReceiptFileURL` is left blank for a freshly-uploaded photo (the real Drive URL isn't
+       known client-side until the CSV catches up) — cosmetic only, not a functional block.
+   - **All three patch functions were verified directly** (not just by inspection): simulated in
+     Node against the real published CSVs, confirming a patched request's `Status` changes
+     immediately, disappears from a `Pending`-filtered list immediately, and a synthetic new
+     request appears alongside an employee's real existing ones without disturbing them.
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the nine `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage` and `updateLineItemAmount` are somewhat better: both require a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the current stage requires (`REQUIRED_ROLE_BY_STATUS`) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.
