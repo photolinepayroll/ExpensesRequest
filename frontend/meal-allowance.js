@@ -6,6 +6,7 @@
 
 var maAttendanceRowsCache = null; // parsed attendance rows, fetched once per page load
 var maStoreCache = null;          // parsed store-coordinates reference rows, fetched once per page load
+var maSeniorHeadBracket = null;   // { [bioId]: { [region]: amount } }, built once alongside maStoreCache
 var maSelectedEmployee = null;    // { EmployeeID, Name } — always mirrors currentEmployee
 var maStartInRecords = [];
 var maEndOutRecords = [];
@@ -114,6 +115,7 @@ function maLoadStoreCoordinates_() {
     })
     .then(function (text) {
       maStoreCache = parseStoreCoordinatesCsv_(text);
+      maSeniorHeadBracket = buildSeniorHeadBracket_(maStoreCache);
       return maStoreCache;
     });
 }
@@ -187,10 +189,29 @@ function maResolveDutyLocation_(endRec) {
 // at any other of the employee's assigned rows still pays that row's real
 // override amount (a covered branch, not home); duty matching neither
 // falls back to the generic regional bracket.
+//
+// Checked first, ahead of both of those: the Senior Head bracket (see
+// buildSeniorHeadBracket_) — a per-person, per-region rate distinct from a
+// specific store, e.g. BIO 783 gets a different amount per broad region
+// (MINDANAO/VISMIN/NORTH LUZON/SOUTH LUZON/CAVITE AREA vs NCR AREA). No
+// proximity check, since it's region-wide by definition — it reuses the
+// same "nearest reference store, as a stand-in for which region this is"
+// resolution already used for the flat bracket. If the employee is a
+// listed Senior Head but on duty in a region not in their table, this falls
+// through to the paths below rather than blocking (same permissive-fallback
+// philosophy as everywhere else in this app).
 function maResolveRegularAllowance_(endRec, regionStore) {
   var empId = String(maSelectedEmployee.EmployeeID || '').trim().toLowerCase();
   var regionAmount = Number(regionStore['REGULAR (AUDIT/TEC/STAFF)']);
   if (!isFinite(regionAmount)) regionAmount = 0;
+
+  var seniorHeadRegions = maSeniorHeadBracket && maSeniorHeadBracket[empId];
+  if (seniorHeadRegions) {
+    var region = String(regionStore['Area/Region'] || '').trim().toUpperCase();
+    if (region && seniorHeadRegions[region] !== undefined) {
+      return { amount: seniorHeadRegions[region], source: 'SeniorHeadBracket' };
+    }
+  }
 
   var matched = null;
   if (maStoreCache) {

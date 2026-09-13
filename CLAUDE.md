@@ -58,9 +58,43 @@ This is **two independently deployed halves that only communicate over HTTP**, n
 
 ## Recently completed (verify in a real browser before considering fully done)
 
-Latest session — pushed to Apps Script Head via `clasp push -f`; **not yet deployed live**
-(`clasp deploy -i` still needs to be run for the backend pieces to take effect on the real
-`/exec` URL). All frontend pieces are static-file changes, live immediately on open.
+Items 1-6 below (submission window, bulk approve/disburse, admin tabs, audit filters,
+sequential IDs, export PDF fix) are **deployed live** — `clasp deploy -i` was run against
+deployment `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`
+(now `@34`) and confirmed via `curl` against the real `/exec` URL. Item 7 is a same-day
+follow-up, 100% frontend, no deploy needed.
+
+7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
+   published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
+   Area-Region / amount) — a per-person, per-region rate distinct from both the existing
+   flat regional bracket and the existing per-store Tech/Area Head proximity override.
+   `frontend/common.js`'s `parseStoreCoordinatesCsv_` reads it via fixed column index into
+   collision-safe keys (`SeniorHeadBioId`/`Name`/`Region`/`Amount`), and a new
+   `buildSeniorHeadBracket_()` turns it into a `{bioId: {region: amount}}` lookup, built once
+   alongside `maStoreCache`. `frontend/meal-allowance.js`'s `maResolveRegularAllowance_` checks
+   this bracket first (highest priority, no proximity radius — it's region-wide by
+   definition), falling through to the existing per-store override then the flat regional
+   bracket if the employee isn't a listed Senior Head or their current region isn't in their
+   table. Data-driven, not hardcoded to the one person (Jayriel, BIO 783) currently listed —
+   a future Senior Head added as a new row needs no code change.
+   - **Real bug found and fixed along the way, not just the new feature**: the same sheet
+     edit that added these columns reused the header names `"Area/Region"` (already at column
+     17) and `"Meal Allowance"` (already at column 5), so the existing header-keyed parsing
+     silently started reading the *new*, mostly-blank sub-table's values instead — breaking
+     the on-screen "Location" display for 113 of 119 stores and silently zeroing every
+     Tech-role personal override amount. Fixed by extending the same fixed-column-index
+     pattern already used for the prior `BIO ID`/`REGULAR (AUDIT/TEC/STAFF)` duplicate-header
+     bug (see `common.js`'s header comment above `parseStoreCoordinatesCsv_`).
+   - **Verified against live data**: parsed the real published CSV in Node and confirmed
+     `Area/Region` is non-blank for all 119 rows, a real Tech override amount resolves
+     correctly (not 0), and BIO 783 resolves to ₱200 at a MINDANAO-region store / ₱100 at an
+     NCR-region store (matching the source sheet), while an unrelated employee at the same
+     stores is unaffected. `node --check` passes on both touched files. No backend
+     push/deploy needed — static frontend only, live immediately. **Not yet checked in a real
+     browser.**
+
+<details>
+<summary>Prior session — items 1-6 (submission window, bulk approve/disburse, admin tabs, audit filters, sequential IDs, export PDF fix)</summary>
 
 1. **Saturday–Wednesday submission window.** `Validation.gs`'s `submissionWindowError_()`
    (called at the top of `validateSubmission_`) blocks `submitLiquidationRequest` on
@@ -125,6 +159,8 @@ Latest session — pushed to Apps Script Head via `clasp push -f`; **not yet dep
    - **Not yet verified in a real browser/PDF** — the CSS reasoning is sound and the two
      earlier attempts' failure modes are understood, but nobody has actually printed/saved a
      PDF with this exact fix yet.
+
+</details>
 
 Older, previously-shipped work below (Timesheet category, CSV-based read paths + optimistic
 cache patching) is fully deployed; see `resume.md` for the full narrative history.

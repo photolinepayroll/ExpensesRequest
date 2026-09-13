@@ -338,6 +338,48 @@ for the exact done/not-done breakdown, summarized here:**
       `git commit`/`push` to GitHub, plus this same doc-update pass, are the user's explicit
       next ask (see the message that triggered writing this entry).
 
+24. New session, resumed and confirmed via `clasp deployments` that item 23's backend changes
+    were already deployed live (deployment `@34`) despite the commit message/doc note saying
+    "Head-only" — the deploy had actually been run at the end of that session, just not
+    reflected back into the docs at the time. Then the user showed a screenshot of a newly
+    added sub-table in the published `STORE_COORDINATES_CSV_URL` sheet: **BIO ID / SENIOR
+    HEAD / Area-Region / Meal Allowance**, currently one person (Jayriel Guardacasa, BIO 783)
+    with a different peso amount per broad region (₱200 for MINDANAO/VISMIN/NORTH LUZON/SOUTH
+    LUZON/CAVITE AREA, ₱100 for NCR AREA). Planned via plan mode with clarifying questions
+    (confirmed: treat as a general, data-driven "Senior Head" role category, not hardcoded to
+    Jayriel; source from the same sheet, not a new one) and implemented:
+    - Live-fetched and parsed the real CSV in Node first to confirm the exact column layout
+      (columns 24-27) before writing any code — same verification discipline as the earlier
+      store-directory column-index work.
+    - `frontend/common.js`'s `parseStoreCoordinatesCsv_` gained fixed-column-index reads for
+      the new columns, stored under collision-safe keys (`SeniorHeadBioId`/`Name`/`Region`/
+      `Amount`), plus a new `buildSeniorHeadBracket_()` that scans all rows into a
+      `{bioId: {region: amount}}` lookup — picks up any future Senior Head added as a new row
+      with no code change. `frontend/meal-allowance.js`'s `maResolveRegularAllowance_` checks
+      this bracket first (region-wide, no proximity radius, unlike the existing per-store
+      Tech/Area Head override), falling through to the existing paths if the employee isn't
+      listed or their current region isn't in their table.
+    - **Real bug found and fixed as a side effect**: the sheet edit that added the Senior Head
+      columns reused two header names already in use elsewhere in the same row —
+      `"Area/Region"` (already at column 17) and `"Meal Allowance"` (already at column 5) —
+      which silently broke the existing header-keyed parsing the same way an earlier session's
+      `BIO ID`/`REGULAR (AUDIT/TEC/STAFF)` duplicate-header bug did (see `common.js`'s existing
+      comment on that class of bug, now updated to describe both rounds). Confirmed live: 113
+      of 119 stores' `Area/Region` was reading blank (breaking the on-screen "Location"
+      display), and every Tech-role personal override amount was silently resolving to 0.
+      Fixed with the same fixed-column-index pattern as the first round.
+    - Verified directly against live data (not just `node --check`): re-fetched the real
+      published CSV in Node, ran the new parsing/bracket-building/resolution functions against
+      it, and confirmed `Area/Region` is now non-blank for all 119 rows, a real Tech override
+      amount resolves correctly (150, not 0), BIO 783 resolves to ₱200 at a MINDANAO-region
+      store and ₱100 at an NCR-region store (matching the screenshot exactly), and an unrelated
+      employee at the same stores still gets the flat regional bracket, unaffected.
+    - 100% static frontend change (`common.js`, `meal-allowance.js`) — no backend push/deploy
+      or `setupSheets()` needed, live immediately. **Not yet checked in a real browser** — only
+      verified via the Node simulation against live CSV data.
+    - `CLAUDE.md`/`resume.md` updated and this session's changes committed/pushed to GitHub as
+      the user's explicit next ask.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

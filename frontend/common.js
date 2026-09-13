@@ -324,21 +324,38 @@ function csvToObjects_(rows) {
 }
 
 // STORE_COORDINATES_CSV_URL's real header row (confirmed via a live fetch)
-// has three duplicate column names — "Store", "BIO ID", and
-// "REGULAR (AUDIT/TEC/STAFF)" all appear twice: once for the per-store
-// data near the front of the row, and again at columns 21/22 for an
-// unrelated "Technical Staff Roster" sub-table (BIO ID -> employee name)
-// crammed into the same published sheet. csvToObjects_ keys by header
-// name, so the later roster occurrence silently overwrote the real
-// per-store "BIO ID"/"REGULAR (AUDIT/TEC/STAFF)" values for every row —
-// this broke the plain regional-bracket Meal Allowance amount entirely
-// (it always computed to ₱0, confirmed live for a plain Staff employee)
-// and any BIO ID membership match. This restores those two fields by
-// fixed column index — re-verify these indices if the sheet's layout
-// ever changes; "Store" also duplicates (columns 0 and 10) but both
-// copies hold the same value in practice, so it's left as-is.
+// has had duplicate column names added onto it twice now. Round 1 (already
+// fixed): "Store", "BIO ID", and "REGULAR (AUDIT/TEC/STAFF)" all appeared
+// twice — once for the per-store data near the front of the row, and again
+// at columns 21/22 for an unrelated "Technical Staff Roster" sub-table
+// crammed into the same sheet — which silently broke the regional-bracket
+// amount (always ₱0) and BIO ID membership matches. Round 2 (this fix): a
+// new "Senior Head" bracket sub-table was appended at columns 24-27, and it
+// happens to reuse the header names "Area/Region" (also column 17) and
+// "Meal Allowance" (also column 5) — so those two also started silently
+// resolving to the *new* sub-table's mostly-blank values (113 of 119 rows
+// blank) instead of the real per-store ones, breaking the on-screen
+// "Location" display and the Tech-role personal override amount. All four
+// affected fields are restored by fixed column index below — re-verify
+// these indices if the sheet's layout ever changes; "Store" also duplicates
+// (columns 0 and 10) but both copies hold the same value in practice, so
+// it's left as-is.
 var STORE_COORD_COL_REGULAR_BRACKET = 2;
 var STORE_COORD_COL_TECH_BIO = 3;
+var STORE_COORD_COL_TECH_AMOUNT = 5;
+var STORE_COORD_COL_AREA_REGION = 17;
+
+// Senior Head bracket (columns 24-27): a per-person, per-region rate table
+// — e.g. BIO 783 gets ₱200 in most regions but ₱100 in NCR AREA — distinct
+// from both the flat per-store regional bracket and the existing per-store
+// Tech/Area Head proximity override. Stored under keys that don't collide
+// with any header name, so a future duplicate elsewhere in the sheet can't
+// silently break this the same way. Most rows have these blank; only the
+// rows that actually carry the bracket table populate them.
+var STORE_COORD_COL_SENIOR_HEAD_BIO = 24;
+var STORE_COORD_COL_SENIOR_HEAD_NAME = 25;
+var STORE_COORD_COL_SENIOR_HEAD_REGION = 26;
+var STORE_COORD_COL_SENIOR_HEAD_AMOUNT = 27;
 
 function parseStoreCoordinatesCsv_(text) {
   var rows = parseCsv_(text);
@@ -350,8 +367,32 @@ function parseStoreCoordinatesCsv_(text) {
       headers.forEach(function (h, i) { obj[h] = r[i] !== undefined ? r[i] : ''; });
       obj['REGULAR (AUDIT/TEC/STAFF)'] = r[STORE_COORD_COL_REGULAR_BRACKET] !== undefined ? r[STORE_COORD_COL_REGULAR_BRACKET] : '';
       obj['BIO ID'] = r[STORE_COORD_COL_TECH_BIO] !== undefined ? r[STORE_COORD_COL_TECH_BIO] : '';
+      obj['Meal Allowance'] = r[STORE_COORD_COL_TECH_AMOUNT] !== undefined ? r[STORE_COORD_COL_TECH_AMOUNT] : '';
+      obj['Area/Region'] = r[STORE_COORD_COL_AREA_REGION] !== undefined ? r[STORE_COORD_COL_AREA_REGION] : '';
+      obj['SeniorHeadBioId'] = r[STORE_COORD_COL_SENIOR_HEAD_BIO] !== undefined ? r[STORE_COORD_COL_SENIOR_HEAD_BIO] : '';
+      obj['SeniorHeadName'] = r[STORE_COORD_COL_SENIOR_HEAD_NAME] !== undefined ? r[STORE_COORD_COL_SENIOR_HEAD_NAME] : '';
+      obj['SeniorHeadRegion'] = r[STORE_COORD_COL_SENIOR_HEAD_REGION] !== undefined ? r[STORE_COORD_COL_SENIOR_HEAD_REGION] : '';
+      obj['SeniorHeadAmount'] = r[STORE_COORD_COL_SENIOR_HEAD_AMOUNT] !== undefined ? r[STORE_COORD_COL_SENIOR_HEAD_AMOUNT] : '';
       return obj;
     });
+}
+
+// Scans all parsed store-coordinate rows for the Senior Head bracket
+// sub-table (see column comment above) and builds a
+// { [bioId-lowercase]: { [region-trimmed-uppercase]: amount } } lookup.
+// Data-driven — picks up any future person/region added as a new row with
+// no code change, since most rows simply have blank Senior Head fields.
+function buildSeniorHeadBracket_(storeRows) {
+  var bracket = {};
+  (storeRows || []).forEach(function (row) {
+    var bioId = String(row['SeniorHeadBioId'] || '').trim().toLowerCase();
+    var region = String(row['SeniorHeadRegion'] || '').trim().toUpperCase();
+    var amount = Number(row['SeniorHeadAmount']);
+    if (!bioId || !region || !isFinite(amount)) return;
+    if (!bracket[bioId]) bracket[bioId] = {};
+    bracket[bioId][region] = amount;
+  });
+  return bracket;
 }
 
 // ---- Store directory (Mother Branch / employee category / Pending-queue
