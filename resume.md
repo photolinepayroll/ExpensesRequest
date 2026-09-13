@@ -291,6 +291,53 @@ for the exact done/not-done breakdown, summarized here:**
       still outstanding from item 21: `setupSheets()` re-run for `CutoffEndDate`, and a full
       real-browser Timesheet end-to-end pass.
 
+23. New session, three separate small plans executed back to back (each via plan mode with
+    clarifying questions), all pushed to Apps Script Head (`clasp push -f`) but **not yet
+    deployed live** (`clasp deploy -i` not run this session) and not yet committed to git as
+    of writing this entry:
+    - **Sat–Wed submission window, bulk approve/disburse, export PDF fit fix.**
+      `Validation.gs` blocks new submissions on Thursday/Friday (Manila time), naming the
+      reopening Saturday and the week's disbursement Friday; mirrored client-side in
+      `employee.js` with a banner + disabled Submit button. `common.js`'s
+      `renderRequestsTable` gained optional checkbox/"select all" support; `admin.js` uses it
+      to let the Reviewer/Authorizer advance many requests at once with a running total,
+      reusing the existing single-request `advanceRequestStage` call in a sequential loop
+      (not `Promise.all`, to avoid hammering `LockService`). The print-preview export's
+      2-up/6-up receipt layout was fitting only 1 receipt per page instead of 2/6 — root
+      cause was `.receipt-page` using `min-height: 90vh` (a viewport unit, meaningless when
+      printed) with no real `height`, so children's `height: 100%` never resolved. First fix
+      (giving `.receipt-page` a real `height: 255mm`) still didn't work — browsers don't
+      reliably resolve flex/grid *percentage* heights during print pagination either. Final,
+      confirmed-working-in-principle fix: explicit millimeter heights per cell (124mm × 2,
+      82mm × 3) instead of any percentage/flex-grow chain. Added a grand-total row to the
+      export summary too.
+    - **Admin split into "Liquidation Requests" + "Reviewed & Disbursed" tabs.** The single
+      queue+dropdown mixing all five statuses was confusing for Reviewer/Authorizer — split
+      into a live queue (Pending/Approved/Rejected/All) and a history tab (Reviewed —
+      still actionable for the Authorizer — plus Authorized/Disbursed, pure history), with
+      Export CSV/Print Preview moved into the history tab since they only ever exported that
+      exact status pair. Confirmed via clarifying questions with the user each time.
+    - **Shorter sequential Request IDs + audit filters + a UI polish fix.**
+      `IdGenerator.gs`'s `generateRequestId_()` replaced the long timestamp+random ID
+      (`REQ-20260912-122045-176`) with a persistent-counter short ID (`REQ#000001`,
+      `REQ#000002`, ...) via `PropertiesService`, safe under the existing `LockService` lock
+      `submitLiquidationRequest` already holds when calling it. The "Reviewed & Disbursed"
+      tab (the permanent audit trail — already showed full, uncapped history by construction)
+      gained Employee Name and Date Requested (from/to, on `DateSubmitted`) filters alongside
+      the existing Status dropdown, and was hidden entirely for Approver-role logins
+      (`applyAdminTabVisibility_`) since only Reviewer/Authorizer need it. Also fixed the
+      Export CSV/Print Preview buttons visually being spread far apart by
+      `.card-header-row`'s 3-way `justify-content: space-between` — grouped them into a
+      `.header-actions` wrapper so they sit tight together.
+    - **Still needed**: `clasp deploy -i` to make the three `.gs` changes
+      (`Validation.gs`/`RequestService.gs`/`IdGenerator.gs`) live on the real `/exec` URL —
+      Head-only so far, per the user's explicit "locally only for checking" request earlier
+      in the session. A real-browser pass on all of the above (bulk-select UX, the fixed PDF
+      page-fit, the new admin tabs/filters, and confirming a real submission actually gets a
+      `REQ#000001`-style ID) — nothing in this session was checked in an actual browser.
+      `git commit`/`push` to GitHub, plus this same doc-update pass, are the user's explicit
+      next ask (see the message that triggered writing this entry).
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

@@ -5,6 +5,44 @@ function showAdminView(view) {
   showEl($(view));
 }
 
+// Two tabs within view-admin: the live "Liquidation Requests" queue
+// (Pending/Approved/Rejected) and "Reviewed & Disbursed" (history +
+// the Authorizer's Disburse action + Export/Print Preview). Mirrors
+// employee.js's setEmployeeTab pattern.
+var currentAdminTab_ = 'queue';
+
+function setAdminTab(tab) {
+  currentAdminTab_ = tab;
+  $('tab-admin-queue').classList.toggle('active', tab === 'queue');
+  $('tab-admin-queue').setAttribute('aria-selected', String(tab === 'queue'));
+  $('tab-admin-history').classList.toggle('active', tab === 'history');
+  $('tab-admin-history').setAttribute('aria-selected', String(tab === 'history'));
+
+  $('view-admin-queue').classList.toggle('hidden', tab !== 'queue');
+  $('view-admin-history').classList.toggle('hidden', tab !== 'history');
+
+  if (tab === 'queue') loadAdminRequests();
+  else loadAdminHistory();
+}
+
+// The "Reviewed & Disbursed" tab (permanent audit history + the
+// Authorizer's Disburse action + Export/Print Preview) is only relevant to
+// Reviewer/Authorizer roles — an Approver's only actionable stage is
+// Pending, on the Liquidation Requests tab. Called right after login/session
+// restore, once currentApprover is known.
+function applyAdminTabVisibility_() {
+  var showHistoryTab = currentApprover.role !== 'Approver';
+  $('tab-admin-history').classList.toggle('hidden', !showHistoryTab);
+}
+
+// Refreshes whichever tab's list is currently showing — used after any
+// mutation (single Approve/Reject/Disburse, Save Amount) whose action panel
+// is rendered identically regardless of which tab it appeared in.
+function refreshAdminActiveTab_() {
+  if (currentAdminTab_ === 'history') loadAdminHistory();
+  else loadAdminRequests();
+}
+
 function initAdminView() {
   $('btn-login-approver').addEventListener('click', handleApproverLogin);
   $('input-approver-password').addEventListener('keydown', function (e) {
@@ -19,6 +57,14 @@ function initAdminView() {
     showAdminView('view-login');
   });
   $('admin-status-filter').addEventListener('change', loadAdminRequests);
+  $('admin-history-filter').addEventListener('change', loadAdminHistory);
+  $('admin-history-name-filter').addEventListener('input', loadAdminHistory);
+  $('admin-history-date-from').addEventListener('change', loadAdminHistory);
+  $('admin-history-date-to').addEventListener('change', loadAdminHistory);
+  $('tab-admin-queue').addEventListener('click', function () { setAdminTab('queue'); });
+  $('tab-admin-history').addEventListener('click', function () { setAdminTab('history'); });
+  queueBulkController_.wireClick();
+  historyBulkController_.wireClick();
 
   if (!restoreApproverSession_()) showAdminView('view-login');
 }
@@ -35,7 +81,8 @@ function restoreApproverSession_() {
     $('approver-display-name').textContent = currentApprover.fullName;
     $('approver-display-role').textContent = ' (' + currentApprover.role + ')';
     showAdminView('view-admin');
-    loadAdminRequests();
+    applyAdminTabVisibility_();
+    setAdminTab('queue');
     return true;
   } catch (e) {
     sessionStorage.removeItem(SESSION_KEY_APPROVER);
@@ -67,7 +114,8 @@ function handleApproverLogin() {
       $('approver-display-name').textContent = currentApprover.fullName;
       $('approver-display-role').textContent = ' (' + currentApprover.role + ')';
       showAdminView('view-admin');
-      loadAdminRequests();
+      applyAdminTabVisibility_();
+      setAdminTab('queue');
     })
     .catch(function (err) {
       loginBtn.disabled = false;
@@ -75,10 +123,34 @@ function handleApproverLogin() {
     });
 }
 
+// Shown for a request whose current stage isn't terminal — either offers the
+// single-item action panel (this approver's own turn) or a "waiting on
+// someone else" note. Shared by both the queue and history tabs, since the
+// stage-advance UI is identical no matter which tab a request is viewed from.
+function adminOnDetailRendered_(panel, request) {
+  var nextAction = NEXT_ACTION_BY_STATUS[request.Status];
+  if (!nextAction) return; // terminal (Authorized/Rejected) — nothing left to do
+
+  var requiredRole = REQUIRED_ROLE_BY_STATUS[request.Status];
+  if (currentApprover.role !== requiredRole) {
+    // Not this person's turn — show it's pending, but no action they can't legally take.
+    panel.insertAdjacentHTML('beforeend',
+      '<p class="muted">Awaiting action from a ' + escapeHtml_(requiredRole) + '.</p>');
+    return;
+  }
+
+  panel.insertAdjacentHTML('beforeend', buildAdminActionsHtml_(request.RequestID, nextAction));
+  wireAdminActions_(panel, request.RequestID, nextAction);
+}
+
+// "Liquidation Requests" tab — the live queue: Pending (Approver),
+// Approved (Reviewer), Rejected, or All of those three. Reviewed/Disbursed
+// live on the separate "Reviewed & Disbursed" tab (loadAdminHistory) instead.
 function loadAdminRequests() {
   var container = $('admin-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
   var statusFilter = $('admin-status-filter').value;
+  var queueStatuses = ['Pending', 'Approved', 'Rejected'];
 
   // Only Approver-role accounts have their Pending view scoped to what this
   // specific person is actually meant to approve (a client-side mirror of the
@@ -86,10 +158,10 @@ function loadAdminRequests() {
   // display/filtering only; advanceRequestStage/updateLineItemAmount
   // independently re-verify the same routing server-side on every call, so a
   // mismatch here can only ever show the wrong list, never approve anything
-  // illegitimately). Reviewer/Authorizer queues stay unscoped, same as the
-  // server. This reads from the CSV-based joined list (loadJoinedRequests_)
-  // instead of a live getAllRequestsForPayroll call — can lag a few minutes
-  // behind the live sheet, an accepted trade-off for this read path.
+  // illegitimately). This reads from the CSV-based joined list
+  // (loadJoinedRequests_) instead of a live getAllRequestsForPayroll call —
+  // can lag a few minutes behind the live sheet, an accepted trade-off for
+  // this read path.
   var scopeToApprover = currentApprover.role === 'Approver' && currentApprover.biometricId;
 
   Promise.all([
@@ -103,7 +175,11 @@ function loadAdminRequests() {
       var employeeRows = results[2];
 
       var requests = allRequests.filter(function (req) {
-        if (statusFilter && statusFilter !== 'All' && req.Status !== statusFilter) return false;
+        if (statusFilter === 'All') {
+          if (queueStatuses.indexOf(req.Status) === -1) return false;
+        } else if (req.Status !== statusFilter) {
+          return false;
+        }
 
         if (req.Status === 'Pending' && scopeToApprover) {
           var emp = employeeRows.filter(function (e) { return String(e.EmployeeID) === String(req.EmployeeID); })[0];
@@ -120,25 +196,83 @@ function loadAdminRequests() {
         return true;
       });
 
+      // Bulk select/advance is only offered for the Reviewer's Approved
+      // queue (bulk target: Reviewed) — gated by the same role check the
+      // single-item action panel already uses (REQUIRED_ROLE_BY_STATUS).
+      // Not offered for Pending, where per-request category/store routing
+      // matters most, or for All/Rejected views.
+      var bulkAction = NEXT_ACTION_BY_STATUS[statusFilter];
+      var bulkEligible = !!bulkAction && statusFilter !== 'Pending' &&
+        currentApprover.role === REQUIRED_ROLE_BY_STATUS[statusFilter];
+
+      queueBulkController_.reset(bulkEligible ? requests : [], bulkAction);
+
       renderRequestsTable(container, requests, {
         showEmployee: true,
+        selectable: bulkEligible,
+        onSelectionChange: bulkEligible ? queueBulkController_.updateSelection : undefined,
         isLineEditable: isLineEditableForCurrentApprover_,
         onSaveAmount: saveLineItemAmount_,
-        onDetailRendered: function (panel, request) {
-          var nextAction = NEXT_ACTION_BY_STATUS[request.Status];
-          if (!nextAction) return; // terminal (Authorized/Rejected) — nothing left to do
+        onDetailRendered: adminOnDetailRendered_
+      });
+    })
+    .catch(function (err) {
+      container.innerHTML = '<div class="msg msg-error" role="alert">' + MSG_ICON_ERROR + '<span>Failed to load: ' + err.message + '</span></div>';
+    });
+}
 
-          var requiredRole = REQUIRED_ROLE_BY_STATUS[request.Status];
-          if (currentApprover.role !== requiredRole) {
-            // Not this person's turn — show it's pending, but no action they can't legally take.
-            panel.insertAdjacentHTML('beforeend',
-              '<p class="muted">Awaiting action from a ' + escapeHtml_(requiredRole) + '.</p>');
-            return;
-          }
+// "Reviewed & Disbursed" tab — Reviewed (still actionable: the Authorizer
+// disburses from here, single + bulk) and Authorized/"Disbursed" (pure
+// history). Both statuses are already unscoped server-side (no category/
+// store routing check applies past the Approved stage), so no routing
+// re-check is needed here the way loadAdminRequests needs one for Pending.
+function loadAdminHistory() {
+  var container = $('admin-history-table-container');
+  container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
+  var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'All'
+  var historyStatuses = ['Reviewed', 'Authorized'];
 
-          panel.insertAdjacentHTML('beforeend', buildAdminActionsHtml_(request.RequestID, nextAction));
-          wireAdminActions_(panel, request.RequestID, nextAction);
+  // Permanent audit trail — this list is never time-windowed or capped
+  // (loadJoinedRequests_ already returns the complete unfiltered dataset);
+  // these three are purely additive search filters over that full history.
+  var nameFilter = $('admin-history-name-filter').value.trim().toLowerCase();
+  var dateFromRaw = $('admin-history-date-from').value; // 'YYYY-MM-DD' or ''
+  var dateToRaw = $('admin-history-date-to').value;
+  var dateFrom = dateFromRaw ? new Date(dateFromRaw + 'T00:00:00') : null;
+  var dateTo = dateToRaw ? new Date(dateToRaw + 'T23:59:59') : null;
+
+  loadJoinedRequests_()
+    .then(function (allRequests) {
+      var requests = allRequests.filter(function (req) {
+        if (statusFilter === 'All') {
+          if (historyStatuses.indexOf(req.Status) === -1) return false;
+        } else if (req.Status !== statusFilter) {
+          return false;
         }
+
+        if (nameFilter && (req.EmployeeName || '').toLowerCase().indexOf(nameFilter) === -1) return false;
+
+        if (dateFrom || dateTo) {
+          var submitted = new Date(req.DateSubmitted);
+          if (dateFrom && submitted < dateFrom) return false;
+          if (dateTo && submitted > dateTo) return false;
+        }
+
+        return true;
+      });
+
+      var bulkAction = NEXT_ACTION_BY_STATUS[statusFilter];
+      var bulkEligible = !!bulkAction && currentApprover.role === REQUIRED_ROLE_BY_STATUS[statusFilter];
+
+      historyBulkController_.reset(bulkEligible ? requests : [], bulkAction);
+
+      renderRequestsTable(container, requests, {
+        showEmployee: true,
+        selectable: bulkEligible,
+        onSelectionChange: bulkEligible ? historyBulkController_.updateSelection : undefined,
+        isLineEditable: isLineEditableForCurrentApprover_,
+        onSaveAmount: saveLineItemAmount_,
+        onDetailRendered: adminOnDetailRendered_
       });
     })
     .catch(function (err) {
@@ -190,7 +324,7 @@ function saveLineItemAmount_(request, line, newAmount) {
         throw new Error(result.error);
       }
       patchCachedLineAmount_(request.RequestID, line.LineID, newAmount);
-      loadAdminRequests(); // refreshes the Total column + audit trail for this request
+      refreshAdminActiveTab_(); // refreshes the Total column + audit trail for this request
       return result;
     });
 }
@@ -252,7 +386,7 @@ function wireAdminActions_(panel, requestId, nextAction) {
           return;
         }
         patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
-        loadAdminRequests();
+        refreshAdminActiveTab_();
       })
       .catch(function (err) {
         currentApprover.password = null;
@@ -264,6 +398,115 @@ function wireAdminActions_(panel, requestId, nextAction) {
   advanceBtn.addEventListener('click', function () { process(nextAction.targetStage, advanceBtn); });
   rejectBtn.addEventListener('click', function () { process('Rejected', rejectBtn); });
 }
+
+// ---- Bulk select/advance (factory reused by the queue tab's Approved-bulk
+// and the history tab's Reviewed-bulk — same UI/flow, different element ids,
+// different underlying request list and refresh target) ----
+
+function makeBulkController_(ids, refresh) {
+  var requestsById = {}; // RequestID -> request object, for summing totals
+  var action = null; // { targetStage, label }, or null when not eligible for the current filter
+
+  // Called at the top of every load*'s render — resets selection state and
+  // shows/hides the bar for the current filter/role combination.
+  function reset(eligibleRequests, bulkAction) {
+    action = bulkAction;
+    requestsById = {};
+    eligibleRequests.forEach(function (req) { requestsById[req.RequestID] = req; });
+
+    var bar = $(ids.bar);
+    clearMessage($(ids.error));
+    if (!eligibleRequests.length || !bulkAction) {
+      hideEl(bar);
+      return;
+    }
+    $(ids.label).textContent = bulkAction.label + ' Selected';
+    showEl(bar);
+    updateSelection([]);
+  }
+
+  function updateSelection(selectedIds) {
+    var total = 0;
+    selectedIds.forEach(function (id) {
+      var req = requestsById[id];
+      if (req) total += Number(req.TotalAmount) || 0;
+    });
+    $(ids.summary).textContent = selectedIds.length + ' selected — Total ' + formatCurrency(total);
+    $(ids.btn).disabled = selectedIds.length === 0;
+    $(ids.btn).dataset.selectedIds = JSON.stringify(selectedIds);
+  }
+
+  function handleClick() {
+    var btn = $(ids.btn);
+    var errorEl = $(ids.error);
+    clearMessage(errorEl);
+    if (!action) return;
+
+    var selectedIds = JSON.parse(btn.dataset.selectedIds || '[]');
+    if (!selectedIds.length) return;
+
+    var total = selectedIds.reduce(function (sum, id) {
+      var req = requestsById[id];
+      return sum + (req ? Number(req.TotalAmount) || 0 : 0);
+    }, 0);
+
+    var confirmed = window.confirm(
+      action.label + ' ' + selectedIds.length + ' request(s) totalling ' + formatCurrency(total) + '?'
+    );
+    if (!confirmed) return;
+
+    if (!ensureApproverPassword_()) return; // cancelled
+
+    var remarks = $(ids.remarks).value.trim();
+    btn.disabled = true;
+    $(ids.label).textContent = 'Processing...';
+
+    var failures = [];
+    var targetStage = action.targetStage;
+
+    // Sequential, not Promise.all — avoids hammering Apps Script/LockService
+    // with concurrent calls, and keeps per-request error attribution simple.
+    selectedIds.reduce(function (chain, requestId) {
+      return chain.then(function () {
+        return runServer('advanceRequestStage', requestId, targetStage, currentApprover.userId, currentApprover.password, remarks)
+          .then(function (result) {
+            if (!result.success) {
+              failures.push(requestId + ': ' + result.error);
+              return;
+            }
+            patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
+          })
+          .catch(function (err) {
+            failures.push(requestId + ': ' + err.message);
+          });
+      });
+    }, Promise.resolve())
+      .then(function () {
+        var succeeded = selectedIds.length - failures.length;
+        if (failures.length) {
+          currentApprover.password = null; // can't tell if a stale password caused a failure — re-prompt next time
+          setMessage(errorEl, succeeded + ' advanced, ' + failures.length + ' failed: ' + failures.join('; '), true);
+        }
+        refresh();
+      });
+  }
+
+  function wireClick() {
+    $(ids.btn).addEventListener('click', handleClick);
+  }
+
+  return { reset: reset, updateSelection: updateSelection, wireClick: wireClick };
+}
+
+var queueBulkController_ = makeBulkController_({
+  bar: 'bulk-action-bar', summary: 'bulk-selection-summary', remarks: 'bulk-remarks',
+  btn: 'btn-bulk-advance', label: 'bulk-advance-label', error: 'bulk-action-error'
+}, function () { loadAdminRequests(); });
+
+var historyBulkController_ = makeBulkController_({
+  bar: 'bulk-action-bar-history', summary: 'bulk-selection-summary-history', remarks: 'bulk-remarks-history',
+  btn: 'btn-bulk-advance-history', label: 'bulk-advance-label-history', error: 'bulk-action-error-history'
+}, function () { loadAdminHistory(); });
 
 // CSV field escaping: quote-wraps any field containing a comma, quote, or
 // newline, doubling embedded quotes — Remarks/Description are free text an
@@ -339,6 +582,13 @@ function buildExportReportHtml_(requests) {
       '</tr>';
   }).join('');
 
+  var grandTotal = requests.reduce(function (sum, req) { return sum + (Number(req.TotalAmount) || 0); }, 0);
+  var grandTotalRow = '<tfoot><tr class="grand-total-row">' +
+    '<td colspan="3"><strong>Grand Total</strong></td>' +
+    '<td><strong>' + escapeHtml_(formatCurrency(grandTotal)) + '</strong></td>' +
+    '<td colspan="4"></td>' +
+    '</tr></tfoot>';
+
   var missing = [];
   var fareItems = [];
   var mealItems = [];
@@ -406,15 +656,31 @@ function buildExportReportHtml_(requests) {
     'th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }' +
     'th { background: #1e3a5f; color: #fff; }' +
     '@page { size: letter portrait; margin: 12mm; }' +
-    '.receipt-page { page-break-before: always; padding-top: 8px; min-height: 90vh; }' +
+    // Letter is 215.9mm x 279.4mm; with 12mm margins the printable content
+    // area is ~255mm tall. A fixed physical height here (not the old
+    // "min-height: 90vh", a viewport unit meaningless once printed) is what
+    // lets the 2-up/6-up children's "height: 100%" resolve to something real
+    // instead of collapsing to auto content height — that collapse was the
+    // actual cause of receipts not fitting/scaling to exactly 2 or 6 per page.
+    // Letter content height after 12mm margins is ~255mm. Chrome/Firefox's
+    // print engine does NOT reliably resolve a flex/grid child's percentage
+    // height against print pages (this was tried first and still produced
+    // 1 receipt per page instead of 2/6 — confirmed by the user) — so every
+    // cell below gets an explicit millimeter height computed from that fixed
+    // page height instead of relying on height:100% cascading through
+    // flex-grow/1fr rows. This is deterministic across browsers because it
+    // never depends on the parent's box being "definite" for percentage
+    // resolution during pagination.
+    '.receipt-page { page-break-before: always; padding-top: 3mm; box-sizing: border-box; }' +
     '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 4px; }' +
-    '.receipt-page-2up { display: flex; flex-direction: column; gap: 12px; height: 100%; }' +
-    '.receipt-page-2up .receipt-cell { flex: 1 1 50%; display: flex; flex-direction: column; min-height: 0; }' +
-    '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
-    '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); gap: 10px; height: 100%; }' +
-    '.receipt-page-6up .receipt-cell { display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; }' +
+    '.receipt-page-2up { display: flex; flex-direction: column; gap: 4mm; }' +
+    '.receipt-page-2up .receipt-cell { height: 124mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
+    '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
+    '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 82mm); gap: 3mm; }' +
+    '.receipt-page-6up .receipt-cell { height: 82mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 3px; }' +
-    '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
+    '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
+    '.grand-total-row td { border-top: 2px solid #1e3a5f; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +
     '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
     '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
@@ -432,7 +698,7 @@ function buildExportReportHtml_(requests) {
     '<table><thead><tr>' +
     '<th>Request ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
     '<th>Approved</th><th>Reviewed</th><th>Authorized</th><th>Crediting Date</th>' +
-    '</tr></thead><tbody>' + summaryRows + '</tbody></table>' +
+    '</tr></thead><tbody>' + summaryRows + '</tbody>' + grandTotalRow + '</table>' +
     receiptPagesHtml +
     missingHtml +
     '</body></html>';

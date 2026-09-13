@@ -58,47 +58,80 @@ This is **two independently deployed halves that only communicate over HTTP**, n
 
 ## Recently completed (verify in a real browser before considering fully done)
 
-Two changes from the plan at `resume.md` item 20 / `C:\Users\Gilbert\.claude\plans\update-plan-separate-the-lexical-riddle.md` are now fully implemented, pushed, and deployed (deployment `@32`):
+Latest session — pushed to Apps Script Head via `clasp push -f`; **not yet deployed live**
+(`clasp deploy -i` still needs to be run for the backend pieces to take effect on the real
+`/exec` URL). All frontend pieces are static-file changes, live immediately on open.
 
-1. **Zoom/pan edge-visibility fix — DONE.** `common.js`'s `wireImageZoomPan_`'s
-   `applyTransform()` swaps effective width/height at 90°/270° rotation before computing
-   the pan clamp (the un-rotated `img.offsetWidth`/`offsetHeight` were previously used even
-   when the rendered bounding box had them swapped, permanently hiding part of a rotated
-   image from panning).
-2. **New "Timesheet" category — DONE, code-complete end to end.** A manually-selectable
-   category (unlike `Meal Allowance`, which is only ever injected via the Meal Allowance
-   utility hand-off) for attaching a reference timesheet photo a reviewer uses to cross-check
-   the request's other Fare/Accommodation/Meal Allowance lines. No Amount/Location/Description
-   (Amount forced to 0, contributing nothing to the request total); a Cut-off date range
-   (start + `CutoffEndDate`) instead of a single date; receipt photo still required, same
-   upload path, relabeled "Timesheet Photo".
-   - Backend: `Config.gs`'s `CATEGORIES` includes `'Timesheet'`; `Setup.gs`'s
-     `SHEET_REQUEST_LINES` header list includes `'CutoffEndDate'`; `RequestService.gs`'s
-     `submitLiquidationRequest` writes it; `Validation.gs`'s `validateSubmission_` branches by
-     category. Pushed and deployed to the live `/exec` URL (`clasp push -f` + `clasp deploy -i`).
-   - Frontend: `frontend/index.html`'s line-item template has the `Timesheet` `<option>`, a
-     hidden `.li-cutoff-end-field`, and wrapper classes on the fields that hide/show as units.
-     `frontend/employee.js` has `applyCategoryLayout_(row)` (wired to the category `<select>`'s
-     `change` event and called once on every freshly-added row) toggling
-     Location/Amount/Description visibility, forcing Amount to `0`/read-only, and relabeling
-     the file field; `collectLineItems()` sends `cutoffEndDate` and blanks
-     amount/baseLocation/description for Timesheet rows; `validateRequiredLineFields_()` skips
-     those three fields and requires the cut-off end date instead, for Timesheet rows only.
-     `frontend/common.js` has shared `formatLineDateDisplay_`/`formatLineAmountDisplay_`
-     helpers used by `buildLineItemsHtml_` and the receipt-modal details pane (suppresses the
-     Location/Description rows and the amount-edit control for Timesheet lines). `frontend/admin.js`
-     has `CutoffEndDate` in `EXPORT_CSV_HEADERS`/`buildExportCsv_`, and
-     `buildExportReportHtml_`'s caption logic drops the bogus "₱0.00" for Timesheet lines
-     (receipts still bucket into the existing 2-per-page `fareItems` layout, unchanged).
-   - **Still needed before calling this fully done**: `setupSheets()` must be re-run once from
-     the Apps Script editor to materialize `CutoffEndDate` on the live `RequestLines` sheet —
-     until then, a real Timesheet submission will fail or silently drop the column. Also
-     genuinely untested in a real browser: adding a Timesheet line and confirming the
-     field show/hide behavior, submitting one end-to-end, and checking its display in My
-     Requests / the admin queue / the receipt modal / CSV export / print-preview report.
-     `node --check` passes on all three touched frontend files.
+1. **Saturday–Wednesday submission window.** `Validation.gs`'s `submissionWindowError_()`
+   (called at the top of `validateSubmission_`) blocks `submitLiquidationRequest` on
+   Thursday/Friday (Manila time, per `appsscript.json`'s `timeZone`), naming the reopening
+   Saturday and the week's disbursement Friday in the error message —
+   `RequestService.gs`'s sibling `computeNextSubmissionOpenSaturday_()` supplies the reopen
+   date (same Monday-indexed week math as the existing `computeNextCreditingFriday_()`).
+   `frontend/employee.js` mirrors this with a banner + disabled Submit button on the New
+   Request tab (`applySubmissionWindowState_`, checked once per tab view) — UX only, the
+   backend re-validates independently on every submit.
+2. **Bulk select + "select all" + running total, Approve/Disburse in bulk.**
+   `frontend/common.js`'s `renderRequestsTable` gained an optional `selectable`/
+   `onSelectionChange` mode (checkboxes + a header "select all", ids skipped for My
+   Requests since it never passes the option). `frontend/admin.js`'s
+   `makeBulkController_(ids, refresh)` factory drives two independent bulk bars — one for
+   the Reviewer's Approved queue, one for the Authorizer's Reviewed queue on the history tab
+   (see item 3) — showing a running total of selected requests' `TotalAmount` and advancing
+   every selected request sequentially through the existing `advanceRequestStage` (not
+   `Promise.all`, to avoid hammering `LockService` concurrently), patching the CSV cache
+   after each success the same way the single-item flow already does.
+3. **Admin split into two tabs: "Liquidation Requests" + "Reviewed & Disbursed".**
+   The old single queue+dropdown mixed all five statuses together, which was confusing for
+   the Reviewer/Authorizer roles specifically. Now: `view-admin-queue`
+   (Pending/Approved/Rejected/All — "All" now strictly means those three, not silently
+   including Reviewed/Authorized as before) is the live "still needs action" queue;
+   `view-admin-history` ("Reviewed & Disbursed") holds Reviewed (Authorizer still disburses
+   from here, single + bulk) and Authorized/"Disbursed" (pure history) together, plus the
+   Export CSV/Print Preview buttons (moved here since they only ever exported this exact
+   status pair anyway). `admin.js`'s `setAdminTab`/`refreshAdminActiveTab_` mirror
+   `employee.js`'s tab pattern; `adminOnDetailRendered_` is shared by both tabs' single-item
+   action panel so `wireAdminActions_`/`isLineEditableForCurrentApprover_` needed no changes.
+   The history tab is now also **hidden entirely for Approver-role logins**
+   (`applyAdminTabVisibility_`, called right after login/session-restore) — an Approver only
+   ever needs the live queue.
+4. **Reviewed & Disbursed: permanent audit filters.** Since this tab is the permanent audit
+   trail (never time-windowed — `loadJoinedRequests_` already returns the full dataset, no
+   code change needed for that part), added Employee Name (substring, case-insensitive) and
+   Date Requested (from/to range on `DateSubmitted`) filters alongside the existing Status
+   dropdown in `loadAdminHistory()`, ANDed together. The Export CSV/Print Preview buttons in
+   this tab's header were also regrouped into a `.header-actions` wrapper so they sit right
+   next to each other instead of being spread apart by `.card-header-row`'s
+   `justify-content: space-between` (which, with 3 flex children, spread all three evenly).
+5. **Shorter, sequential Request IDs.** `IdGenerator.gs`'s `generateRequestId_()` replaced
+   the long `REQ-20260912-122045-176` timestamp+random format with a persistent counter via
+   `PropertiesService` — `REQ#000001`, `REQ#000002`, etc. Safe without new locking since
+   `submitLiquidationRequest` already calls this from inside its existing
+   `LockService.getScriptLock()` section. Old `REQ-...` IDs stay as historical values (no
+   migration needed — the two formats can never collide). `generateLineId_`/
+   `generateMealAllowanceId_` are unaffected.
+6. **Export PDF page-fit bug — fixed.** `admin.js`'s `buildExportReportHtml_` 2-up/6-up
+   receipt layouts were only fitting 1 receipt per printed page instead of 2/6. Root cause:
+   `.receipt-page` had `min-height: 90vh` (a *viewport* unit, meaningless once printed) and
+   no real `height`, so children's `height: 100%` never resolved to anything definite and
+   collapsed to auto content height. First attempted fix (giving `.receipt-page` a real
+   `height: 255mm`) still didn't fix it — browsers' print engines don't reliably resolve a
+   flex/grid child's *percentage* height against print pages either. Final fix: every cell
+   gets an **explicit millimeter height** computed from the fixed page height instead
+   (124mm × 2 for the 2-up layout, 82mm × 3 for the 6-up grid), which is deterministic
+   because it never depends on a parent being "definite" during pagination. Also added
+   `page-break-inside: avoid` per cell, matching borders on both bucket types, and a
+   grand-total `<tfoot>` row summing `TotalAmount` across the exported set.
+   - **Not yet verified in a real browser/PDF** — the CSS reasoning is sound and the two
+     earlier attempts' failure modes are understood, but nobody has actually printed/saved a
+     PDF with this exact fix yet.
 
-3. **CSV-based read paths for speed + resilience against Apps Script's transient "echo" 404 — DONE.**
+Older, previously-shipped work below (Timesheet category, CSV-based read paths + optimistic
+cache patching) is fully deployed; see `resume.md` for the full narrative history.
+
+<details>
+<summary>Prior session: CSV-based read paths for speed + resilience against Apps Script's transient "echo" 404 — DONE.</summary>
+
    Apps Script's GET/POST flow always redirects to a one-time `script.googleusercontent.com`
    content URL, and that hop intermittently 404s (confirmed transient: the exact same call
    always succeeds on an immediate retry, both via a live `curl`/Node test and by re-clicking in
@@ -173,6 +206,8 @@ Two changes from the plan at `resume.md` item 20 / `C:\Users\Gilbert\.claude\pla
      Node against the real published CSVs, confirming a patched request's `Status` changes
      immediately, disappears from a `Pending`-filtered list immediately, and a synthetic new
      request appears alongside an employee's real existing ones without disturbing them.
+
+</details>
 
 ## Security model (intentional, not an oversight)
 

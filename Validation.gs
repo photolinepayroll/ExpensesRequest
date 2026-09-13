@@ -3,7 +3,26 @@
  * fast feedback; nothing here trusts the browser.
  */
 
+// Requests are only accepted Saturday through Wednesday (payroll processes
+// Thu/Fri for Friday disbursement); the window simply reopens the following
+// Saturday, with no stored cycle state — computeNextCreditingFriday_/
+// computeNextSubmissionOpenSaturday_ (RequestService.gs) are pure date math.
+function submissionWindowError_() {
+  var day = new Date().getDay(); // Sun=0 ... Sat=6, Manila time (script timeZone)
+  if (day === 4 || day === 5) { // Thu, Fri
+    var tz = Session.getScriptTimeZone();
+    var reopenDate = Utilities.formatDate(computeNextSubmissionOpenSaturday_(), tz, 'MMM d, yyyy');
+    var creditingDate = Utilities.formatDate(computeNextCreditingFriday_(), tz, 'MMM d, yyyy');
+    return 'Requests can only be submitted Saturday through Wednesday. ' +
+      'Submission reopens ' + reopenDate + '. This week\'s disbursement is Friday, ' + creditingDate + '.';
+  }
+  return null;
+}
+
 function validateSubmission_(payload) {
+  var windowError = submissionWindowError_();
+  if (windowError) return windowError;
+
   if (!payload || !payload.employeeId) {
     return 'Employee ID is missing.';
   }

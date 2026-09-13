@@ -226,6 +226,53 @@ function setEmployeeTab(tab) {
   $('view-utilities').classList.toggle('hidden', tab !== 'utilities');
 
   if (tab === 'my-requests') loadMyRequests();
+  if (tab === 'new-request') applySubmissionWindowState_();
+}
+
+// Requests are only accepted Saturday through Wednesday (payroll processes
+// Thu/Fri for Friday disbursement, then the window simply reopens the
+// following Saturday) — mirrors Validation.gs's submissionWindowError_,
+// which stays authoritative. UX-only: checked once per New Request tab
+// view, not on a live clock tick.
+function computeNextSubmissionOpenSaturday_() {
+  var today = new Date();
+  var mondayIndex = (today.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  var daysUntilSaturday = 5 - mondayIndex; // Sat=5 in Monday-indexed week
+  if (daysUntilSaturday < 0) daysUntilSaturday += 7;
+  var d = new Date(today);
+  d.setDate(d.getDate() + daysUntilSaturday);
+  return d;
+}
+
+function computeThisWeekCreditingFriday_() {
+  var today = new Date();
+  var mondayIndex = (today.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  var daysUntilFriday = 4 - mondayIndex; // Fri=4 in Monday-indexed week
+  if (daysUntilFriday < 0) daysUntilFriday += 7;
+  var d = new Date(today);
+  d.setDate(d.getDate() + daysUntilFriday);
+  return d;
+}
+
+function isSubmissionWindowOpen_() {
+  var day = new Date().getDay(); // Sun=0 ... Sat=6
+  return day !== 4 && day !== 5; // closed Thu/Fri
+}
+
+function applySubmissionWindowState_() {
+  var banner = $('submission-window-banner');
+  var submitBtn = $('btn-submit-request');
+  if (isSubmissionWindowOpen_()) {
+    hideEl(banner);
+    submitBtn.disabled = false;
+    return;
+  }
+  setMessage(banner,
+    'Submissions are closed on Thursdays and Fridays for processing. Reopens Saturday, ' +
+    formatDateDisplay(computeNextSubmissionOpenSaturday_()) + '. This week\'s disbursement is Friday, ' +
+    formatDateDisplay(computeThisWeekCreditingFriday_()) + '.',
+    true);
+  submitBtn.disabled = true;
 }
 
 // ---- New request line items ----
@@ -516,6 +563,12 @@ function handleSubmitRequest() {
   var successEl = $('submit-success');
   clearMessage(errorEl);
   clearMessage(successEl);
+
+  if (!isSubmissionWindowOpen_()) {
+    applySubmissionWindowState_();
+    setMessage(errorEl, 'Submissions are closed today. See the notice above.', true);
+    return;
+  }
 
   if (!document.querySelectorAll('#line-items-container .line-item-row').length) {
     setMessage(errorEl, 'Add at least one line item.', true);

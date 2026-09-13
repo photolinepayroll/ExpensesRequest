@@ -89,14 +89,20 @@ function renderRequestsTable(container, requests, options) {
   }
 
   var showEmployee = !!options.showEmployee;
+  var selectable = !!options.selectable;
   var colCount = showEmployee ? 6 : 5;
+  if (selectable) colCount += 1;
   var html = '<div class="table-scroll"><table class="data-table"><thead><tr>';
+  if (selectable) html += '<th class="select-col"><input type="checkbox" id="select-all-requests" aria-label="Select all"></th>';
   html += '<th>Request ID</th><th>Date</th>';
   if (showEmployee) html += '<th>Employee</th>';
   html += '<th>Total</th><th>Status</th><th>Crediting Date</th></tr></thead><tbody>';
 
   requests.forEach(function (req, idx) {
     html += '<tr class="request-row" data-idx="' + idx + '" tabindex="0" role="button" aria-expanded="false">';
+    if (selectable) {
+      html += '<td class="select-col" data-label="Select"><input type="checkbox" class="row-select" data-request-id="' + escapeHtml_(req.RequestID) + '" aria-label="Select request ' + escapeHtml_(req.RequestID) + '"></td>';
+    }
     html += '<td data-label="Request ID">' + escapeHtml_(req.RequestID) + '</td>';
     html += '<td data-label="Date">' + formatDateDisplay(req.DateSubmitted) + '</td>';
     if (showEmployee) html += '<td data-label="Employee">' + escapeHtml_(req.EmployeeName) + ' (' + escapeHtml_(req.EmployeeID) + ')</td>';
@@ -110,6 +116,36 @@ function renderRequestsTable(container, requests, options) {
   });
   html += '</tbody></table></div>';
   container.innerHTML = html;
+
+  if (selectable) {
+    var selectAllEl = container.querySelector('#select-all-requests');
+    var rowCheckboxes = container.querySelectorAll('.row-select');
+
+    function currentSelectedIds() {
+      var ids = [];
+      rowCheckboxes.forEach(function (cb) { if (cb.checked) ids.push(cb.getAttribute('data-request-id')); });
+      return ids;
+    }
+
+    function fireSelectionChange() {
+      if (options.onSelectionChange) options.onSelectionChange(currentSelectedIds());
+    }
+
+    rowCheckboxes.forEach(function (cb) {
+      cb.addEventListener('click', function (e) { e.stopPropagation(); });
+      cb.addEventListener('change', function () {
+        if (!cb.checked) selectAllEl.checked = false;
+        else if (currentSelectedIds().length === rowCheckboxes.length) selectAllEl.checked = true;
+        fireSelectionChange();
+      });
+    });
+
+    selectAllEl.addEventListener('click', function (e) { e.stopPropagation(); });
+    selectAllEl.addEventListener('change', function () {
+      rowCheckboxes.forEach(function (cb) { cb.checked = selectAllEl.checked; });
+      fireSelectionChange();
+    });
+  }
 
   function toggleRow(row) {
     var idx = row.getAttribute('data-idx');

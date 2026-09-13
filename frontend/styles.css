@@ -152,6 +152,7 @@ header.app-header {
   gap: 12px;
 }
 .card-header-row h2 { margin: 0; }
+.header-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 .identity-card {
   display: flex;
@@ -382,6 +383,28 @@ input[type="file"] { min-height: auto; font-size: 0.85rem; padding: 8px 0; borde
 .total-bar .label { font-family: var(--font-heading); font-weight: 600; color: var(--color-muted-text); font-size: 0.9rem; }
 .total-bar .amount { font-family: var(--font-heading); font-size: 1.5rem; font-weight: 700; color: var(--color-accent); }
 
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  background: #f0fdf9;
+  border: 1px solid #c9f0e2;
+  border-radius: var(--radius-md);
+}
+.bulk-action-bar #bulk-selection-summary {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+.bulk-action-bar .bulk-remarks { flex: 1 1 200px; min-width: 0; }
+.bulk-action-bar .msg { width: 100%; margin: 0; }
+table.data-table th.select-col,
+table.data-table td.select-col { width: 2.5rem; text-align: center; }
+
 /* ---- Tables ---- */
 
 .table-scroll { overflow-x: auto; }
@@ -562,6 +585,9 @@ table.data-table tr.request-row:focus-visible { outline-offset: -2px; }
   .admin-actions { flex-direction: column; align-items: stretch; }
   .admin-actions .field { min-width: 0; }
   .admin-actions .btn { width: 100%; }
+
+  .bulk-action-bar { flex-direction: column; align-items: stretch; }
+  .bulk-action-bar .btn { width: 100%; }
 }
 
 /* ---- Meal Allowance utility ---- */

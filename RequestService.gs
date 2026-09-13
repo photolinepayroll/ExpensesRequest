@@ -188,6 +188,19 @@ function computeNextCreditingFriday_() {
   return new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilFriday);
 }
 
+// The submission window reopens every Saturday (see Validation.gs's
+// submissionWindowError_) — this is the Saturday of the current Mon-Sun
+// week, or next week's if today is already past it (Sun and Mon-Wed, since
+// those days are actually inside the window; only called when computing a
+// reopen date to show alongside a Thu/Fri "closed" message).
+function computeNextSubmissionOpenSaturday_() {
+  var today = new Date();
+  var mondayIndex = (today.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  var daysUntilSaturday = 5 - mondayIndex; // Sat=5 in Monday-indexed week
+  if (daysUntilSaturday < 0) daysUntilSaturday += 7;
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilSaturday);
+}
+
 function advanceRequestStage(requestId, targetStage, userId, password, remark) {
   var approverResult = getApproverByCredentials_(userId, password);
   if (!approverResult.found) {
