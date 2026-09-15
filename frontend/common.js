@@ -156,7 +156,11 @@ function renderRequestsTable(container, requests, options) {
     if (isHidden) {
       detailRow.classList.remove('hidden');
       row.setAttribute('aria-expanded', 'true');
-      var panel = $('detail-panel-' + idx);
+      // Scoped to this table's own container, not a global getElementById lookup —
+      // admin.html keeps two tables (queue + history) in the DOM at once, each
+      // numbering its own detail panels from 0, so a global id lookup here would
+      // silently write into the wrong (other tab's, hidden) panel.
+      var panel = container.querySelector('#detail-panel-' + idx);
       if (!panel.dataset.rendered) {
         panel.innerHTML = buildLineItemsHtml_(requests[idx]);
         panel.dataset.rendered = '1';
@@ -203,21 +207,24 @@ function buildLineItemsHtml_(request) {
 // (admin.js only; My Requests never passes it, so it stays view-only), and
 // options.onSaveAmount(request, line, newAmount) -> Promise performs the save.
 function wireLineItemRows_(panel, request, options) {
-  function openFor(row) {
-    var lineId = row.getAttribute('data-line-id');
-    var line = null;
-    request.lines.forEach(function (l) {
-      if (String(l.LineID) === String(lineId)) line = l;
-    });
-    if (!line) return;
-
+  function computeLineOptions(line) {
     var editable = !!(options.isLineEditable && options.isLineEditable(request) && options.onSaveAmount);
-    openLineItemPreview_(line, {
+    return {
       editable: editable,
       onSaveAmount: (editable && options.onSaveAmount)
         ? function (newAmount) { return options.onSaveAmount(request, line, newAmount); }
         : null
+    };
+  }
+
+  function openFor(row) {
+    var lineId = row.getAttribute('data-line-id');
+    var index = -1;
+    request.lines.forEach(function (l, i) {
+      if (String(l.LineID) === String(lineId)) index = i;
     });
+    if (index === -1) return;
+    openLineItemPreviewWithNav_(request.lines, index, computeLineOptions);
   }
 
   panel.querySelectorAll('tr.line-detail-row').forEach(function (row) {
@@ -822,10 +829,13 @@ function ensureReceiptModal_() {
   });
   backdrop.querySelector('.receipt-modal-close').addEventListener('click', close);
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !backdrop.classList.contains('hidden')) close();
+    if (backdrop.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { close(); return; }
+    if (e.key === 'ArrowLeft' && receiptModal_.currentNav && receiptModal_.currentNav.onPrev) receiptModal_.currentNav.onPrev();
+    if (e.key === 'ArrowRight' && receiptModal_.currentNav && receiptModal_.currentNav.onNext) receiptModal_.currentNav.onNext();
   });
 
-  receiptModal_ = { backdrop: backdrop, close: close };
+  receiptModal_ = { backdrop: backdrop, close: close, currentNav: null };
   return receiptModal_;
 }
 
@@ -1003,6 +1013,28 @@ var ICON_ROTATE_LEFT =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><polyline points="3 4 3 9 8 9"></polyline></svg>';
 var ICON_ROTATE_RIGHT =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><polyline points="21 4 21 9 16 9"></polyline></svg>';
+var ICON_CHEVRON_LEFT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>';
+var ICON_CHEVRON_RIGHT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+
+// Messenger-style "N of total" navigation across a request's other line
+// items/attachments. `computeLineOptionsFn(line)` re-derives the
+// editable/onSaveAmount pair for whichever line is being shown (see
+// wireLineItemRows_) since that closure is bound to a specific line.
+function openLineItemPreviewWithNav_(lines, index, computeLineOptionsFn) {
+  var line = lines[index];
+  var opts = computeLineOptionsFn(line);
+  opts.position = index + 1;
+  opts.total = lines.length;
+  opts.onPrev = index > 0
+    ? function () { openLineItemPreviewWithNav_(lines, index - 1, computeLineOptionsFn); }
+    : null;
+  opts.onNext = index < lines.length - 1
+    ? function () { openLineItemPreviewWithNav_(lines, index + 1, computeLineOptionsFn); }
+    : null;
+  openLineItemPreview_(line, opts);
+}
 
 function openLineItemPreview_(line, options) {
   options = options || {};
@@ -1033,6 +1065,22 @@ function openLineItemPreview_(line, options) {
   } else {
     imagePane.innerHTML =
       '<div class="receipt-modal-placeholder">' + RECEIPT_PLACEHOLDER_ICON + '<p>No receipt uploaded.</p></div>';
+  }
+
+  modal.currentNav = { onPrev: options.onPrev || null, onNext: options.onNext || null };
+
+  if (options.total > 1) {
+    var navHtml =
+      '<div class="receipt-modal-counter">' + options.position + ' / ' + options.total + '</div>' +
+      '<button type="button" class="receipt-modal-nav-prev" aria-label="Previous attachment"' + (options.onPrev ? '' : ' disabled') + '>' + ICON_CHEVRON_LEFT + '</button>' +
+      '<button type="button" class="receipt-modal-nav-next" aria-label="Next attachment"' + (options.onNext ? '' : ' disabled') + '>' + ICON_CHEVRON_RIGHT + '</button>';
+    imagePane.insertAdjacentHTML('beforeend', navHtml);
+    if (options.onPrev) {
+      imagePane.querySelector('.receipt-modal-nav-prev').addEventListener('click', options.onPrev);
+    }
+    if (options.onNext) {
+      imagePane.querySelector('.receipt-modal-nav-next').addEventListener('click', options.onNext);
+    }
   }
 
   var isTimesheet = line.Category === 'Timesheet';

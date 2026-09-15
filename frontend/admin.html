@@ -77,9 +77,12 @@
           <div id="bulk-action-bar" class="bulk-action-bar hidden">
             <span id="bulk-selection-summary">0 selected</span>
             <input type="text" id="bulk-remarks" class="bulk-remarks" placeholder="Remarks (optional, applies to all selected)">
-            <button class="btn btn-success btn-small" id="btn-bulk-advance" type="button" disabled>
-              <span id="bulk-advance-label">Advance Selected</span>
-            </button>
+            <div class="bulk-action-buttons">
+              <button class="btn btn-success btn-small" id="btn-bulk-advance" type="button" disabled>
+                <span id="bulk-advance-label">Advance Selected</span>
+              </button>
+              <button class="btn btn-danger btn-solid btn-small" id="btn-bulk-reject" type="button" disabled>Reject Selected</button>
+            </div>
             <div class="msg msg-error hidden" id="bulk-action-error" role="alert"></div>
           </div>
           <div id="admin-table-container">
@@ -127,9 +130,12 @@
           <div id="bulk-action-bar-history" class="bulk-action-bar hidden">
             <span id="bulk-selection-summary-history">0 selected</span>
             <input type="text" id="bulk-remarks-history" class="bulk-remarks" placeholder="Remarks (optional, applies to all selected)">
-            <button class="btn btn-success btn-small" id="btn-bulk-advance-history" type="button" disabled>
-              <span id="bulk-advance-label-history">Advance Selected</span>
-            </button>
+            <div class="bulk-action-buttons">
+              <button class="btn btn-success btn-small" id="btn-bulk-advance-history" type="button" disabled>
+                <span id="bulk-advance-label-history">Advance Selected</span>
+              </button>
+              <button class="btn btn-danger btn-solid btn-small" id="btn-bulk-reject-history" type="button" disabled>Reject Selected</button>
+            </div>
             <div class="msg msg-error hidden" id="bulk-action-error-history" role="alert"></div>
           </div>
           <div id="admin-history-table-container">

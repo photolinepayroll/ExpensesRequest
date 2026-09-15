@@ -380,13 +380,72 @@ for the exact done/not-done breakdown, summarized here:**
     - `CLAUDE.md`/`resume.md` updated and this session's changes committed/pushed to GitHub as
       the user's explicit next ask.
 
+25. New session, two Approvers-side usability requests, planned via plan mode (Explore agents
+    surveyed the existing receipt modal and bulk-select code first, then clarifying questions on
+    scope) and built entirely in the frontend (`common.js`, `admin.js`, `admin.html`,
+    `styles.css`) — no backend changes, no deploy needed:
+    - **Messenger-style Prev/Next attachment navigation in the receipt modal.** Clicking a line
+      item still opens the same shared modal, but if the request has 2+ line items it now shows
+      Prev/Next arrow buttons plus an "N / total" counter overlaid on the image pane, and
+      Left/Right arrow keys navigate too — matching how Facebook Messenger's single-attachment
+      viewer works. `wireLineItemRows_` now resolves the clicked line's *index* within
+      `request.lines` (the full array was already sitting in scope, no new plumbing needed) and
+      hands off to a new `openLineItemPreviewWithNav_(lines, index, computeLineOptionsFn)`, which
+      recomputes the editable/onSaveAmount pair for whichever line is currently shown (needed
+      since Save Amount must always target the *currently displayed* line, not the originally
+      clicked one) and re-invokes the existing `openLineItemPreview_` — zoom/pan/rotation state
+      naturally resets per attachment since a fresh `<img>` is built every call, matching
+      Messenger's own behavior. The existing single global `keydown` listener (already handling
+      Escape) was extended to also read `modal.currentNav.onPrev`/`onNext` for the arrow keys,
+      rather than adding a new listener per modal open.
+    - **Bulk select extended to every approval stage, including Reject.** Previously bulk
+      select-all only existed for Approved→Reviewed and Reviewed→Authorized, and only ever did
+      the forward action — no bulk on Pending (deliberately excluded before) and no bulk Reject
+      anywhere. Confirmed via clarifying questions that both should be added: the Pending queue
+      an Approver sees is already server-side scoped to only their routed requests, so
+      bulk-approving within that pre-filtered list carries no new authorization risk (`advanceRequestStage`
+      still independently re-checks routing per item regardless). Removed the
+      `statusFilter !== 'Pending'` exclusion in `loadAdminRequests`, and extended
+      `makeBulkController_` with a second "Reject Selected" button sharing the same checkboxes/
+      running-total/confirm/password-gate/sequential-processing flow as the forward action —
+      only the target stage (`'Rejected'`) and confirm wording differ. Both bulk bars in
+      `admin.html` gained the new button, wrapped in a `.bulk-action-buttons` flex group.
+    - **Bug found and fixed along the way (CSS): nav/download/rotate buttons weren't scoped to
+      the image pane.** `.receipt-modal-image-pane` had no `position: relative`, so every
+      absolutely-positioned overlay button appended inside it (download, rotate, and the new
+      Prev/Next/counter) was actually positioning itself relative to the whole `.receipt-modal`
+      card — harmless by coincidence for top-left-anchored buttons, but the new right-anchored
+      Next button and center counter would land at the edge/center of the *entire* modal
+      (bleeding into the details pane on desktop's side-by-side layout) instead of the image
+      area. Fixed with one `position: relative` on `.receipt-modal-image-pane`.
+    - **Real, confirmed bug found and fixed, unrelated to the two features above**: user reported
+      expanding a request row on the "Reviewed & Disbursed" tab showed the row highlighting as
+      expanded but the line-items panel stayed completely blank, no console error. Verified with
+      a Node+jsdom harness against the real live published CSVs (not just code inspection) that
+      `buildLineItemsHtml_`/`renderRequestsTable` correctly produce the full 9-line-item table for
+      the exact reported request (`REQ-20260912-122045-176`) in isolation — ruling out a data or
+      parsing bug. Root cause found by simulating **both admin tabs rendered at once** (as
+      `admin.html` actually does — both tables stay in the DOM simultaneously, just CSS-hidden
+      when inactive): `toggleRow`'s panel lookup (`common.js`) used a global
+      `document.getElementById('detail-panel-' + idx)`, but both tabs' tables number their rows
+      from 0, so `detail-panel-0` existed twice in the document and `getElementById` always
+      grabbed the *first* one — silently writing content into the other (hidden) tab's panel
+      while the currently-visible one stayed empty. No exception, since the wrong panel was still
+      a valid element. Fixed by scoping the lookup to `container.querySelector('#detail-panel-' +
+      idx)` instead of a global id search. Re-verified the exact collision scenario (two tables,
+      both idx=0) in the jsdom harness after the fix — the correct table's panel now renders its
+      9 lines and the other tab's panel is confirmed untouched.
+    - `node --check` passes on both touched `.js` files. **Not yet checked in a real browser** —
+      verified via Node/jsdom simulation against live CSV data only; still to confirm personally:
+      Prev/Next arrows position correctly and don't overlap the details pane on desktop, arrow-key
+      navigation, bulk-approve on the Pending queue, and bulk-Reject on all three bars.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.
     - **Genuinely NOT verified — client-side-only, `curl` can't exercise it**: the actual **compression step** (`compressImageForUpload_` in `employee.js` — canvas re-encode toward ~1MB, quality stepped down from 0.9 to a 0.5 floor). It's in the deployed code and passes `node --check`, but nobody has yet uploaded a real large receipt photo and confirmed the file that lands in Drive is actually ~1MB and still legible. Likewise untested: session persistence across refresh, the zoom/pan/drag/download modal interactions, and the Approver Save Amount UI flow.
     - Worth a real end-to-end pass: log in on both pages and refresh; submit a request with a blank field and with no receipt (should block on both); open a receipt preview and try scroll-zoom, drag-pan, double-click-reset, and the download button; as an Approver during their own turn, edit and save a line item's Amount; select a large photo as a receipt and confirm it actually shrinks toward ~1MB while staying legible.
 - Old unused `Index.html`/`CSS.html`/`JS_Common.html`/`JS_Employee.html`/`JS_Admin.html` files still sit in the **remote** Apps Script project (clasp doesn't delete remote files that vanish locally) — harmless but could be manually deleted in the Apps Script editor for cleanliness.
-- `frontend/` has not yet actually been pushed to a GitHub repo / GitHub Pages — that's the next real step whenever the user wants to do it.
 - Old `Name`/`PIN` columns (from the PIN scheme, before User ID + password) and older `ProcessedBy`/`ProcessedDate` columns (from the original single-step approval) are all sitting unused in the `Approvers`/`Requests` sheets — `createOrMigrateSheet_` only adds missing columns, never removes old ones. Worth a manual cleanup pass in the Sheet UI at some point, not urgent.
 - No automated tests exist anywhere in this project.
 - Security model is intentionally incremental, not fully "real" — User ID + password login is a step up from free-text names (server-verified identity+role on every action) but passwords are plain text with no rate-limiting/session expiry. Documented in `CLAUDE.md`; don't silently "harden" this further (hashing, real accounts, etc.) without an explicit ask.

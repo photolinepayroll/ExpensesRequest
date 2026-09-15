@@ -93,6 +93,45 @@ follow-up, 100% frontend, no deploy needed.
      push/deploy needed — static frontend only, live immediately. **Not yet checked in a real
      browser.**
 
+8. **Messenger-style Prev/Next attachment navigation + bulk select on every approval stage,
+   including bulk Reject.** Both 100% frontend (`common.js`, `admin.js`, `admin.html`,
+   `styles.css`), no backend push/deploy needed.
+   - The shared receipt/line-item preview modal now shows Prev/Next arrows + an "N / total"
+     counter (plus Left/Right arrow-key support) whenever a request has 2+ line items, so an
+     Approver can page through every attachment on a request without closing and reopening the
+     modal — `wireLineItemRows_` resolves the clicked line's index in `request.lines` (already
+     in scope) and hands off to a new `openLineItemPreviewWithNav_`, which recomputes the
+     editable/`onSaveAmount` binding per line shown (so Save Amount always targets whichever
+     attachment is currently displayed) and re-invokes the existing `openLineItemPreview_`.
+   - Bulk select is no longer limited to Approved→Reviewed and Reviewed→Authorized: the
+     Pending→Approve exclusion in `loadAdminRequests` was removed (safe since the Pending queue
+     is already server-side scoped to the logged-in Approver's own routed requests, and
+     `advanceRequestStage` re-checks routing per item regardless), and `makeBulkController_`
+     gained a second "Reject Selected" button on every bulk bar, sharing the same
+     checkboxes/running-total/confirm/password-gate/sequential-processing flow as the forward
+     action.
+   - **Two real bugs found and fixed along the way** (not just the two features above):
+     (1) `.receipt-modal-image-pane` had no `position: relative`, so every overlay button inside
+     it (download, rotate, and the new Prev/Next/counter) was positioning itself relative to the
+     whole `.receipt-modal` card instead of just the image area — harmless by coincidence for
+     the existing top-left buttons, but the new right-anchored Next button and center counter
+     would have bled into the details pane on desktop. Fixed with one `position: relative`.
+     (2) User reported the "Reviewed & Disbursed" tab's expanded row showing a completely blank
+     line-items panel with no console error. Root cause (found by simulating both admin tabs
+     rendered at once in a Node+jsdom harness, matching how `admin.html` actually keeps both
+     tables in the DOM simultaneously): `toggleRow`'s panel lookup used a global
+     `document.getElementById('detail-panel-' + idx)`, but both tabs' tables number their rows
+     from 0, so `detail-panel-0` existed twice and the lookup always grabbed the *first* one in
+     the document — silently writing content into the other (hidden) tab's panel while the
+     visible one stayed empty. Fixed by scoping the lookup to
+     `container.querySelector('#detail-panel-' + idx)`.
+   - **Verified via Node/jsdom against the real live published Requests/RequestLines CSVs**
+     (not just `node --check`): confirmed the exact reported request renders all 9 line items
+     correctly after the fix, and re-simulated the two-tables-at-once collision scenario to
+     confirm the fix resolves it without touching the other tab's panel. **Not yet checked in a
+     real browser** — Prev/Next positioning, arrow-key nav, and bulk-approve/bulk-reject on all
+     three bars still need a manual pass.
+
 <details>
 <summary>Prior session — items 1-6 (submission window, bulk approve/disburse, admin tabs, audit filters, sequential IDs, export PDF fix)</summary>
 

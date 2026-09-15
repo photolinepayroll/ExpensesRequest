@@ -196,13 +196,17 @@ function loadAdminRequests() {
         return true;
       });
 
-      // Bulk select/advance is only offered for the Reviewer's Approved
-      // queue (bulk target: Reviewed) — gated by the same role check the
-      // single-item action panel already uses (REQUIRED_ROLE_BY_STATUS).
-      // Not offered for Pending, where per-request category/store routing
-      // matters most, or for All/Rejected views.
+      // Bulk select/advance (+ bulk Reject) is offered for any status with a
+      // forward action defined — Pending (bulk Approve), Approved (bulk Mark
+      // Reviewed) — gated by the same role check the single-item action
+      // panel already uses (REQUIRED_ROLE_BY_STATUS). Not offered for
+      // All/Rejected views (no forward action defined for those). Bulk-
+      // acting on Pending is safe even though it's per-request routed,
+      // since this queue is already scoped to only the requests routed to
+      // this approver — advanceRequestStage still independently re-checks
+      // routing per item server-side regardless.
       var bulkAction = NEXT_ACTION_BY_STATUS[statusFilter];
-      var bulkEligible = !!bulkAction && statusFilter !== 'Pending' &&
+      var bulkEligible = !!bulkAction &&
         currentApprover.role === REQUIRED_ROLE_BY_STATUS[statusFilter];
 
       queueBulkController_.reset(bulkEligible ? requests : [], bulkAction);
@@ -406,6 +410,7 @@ function wireAdminActions_(panel, requestId, nextAction) {
 function makeBulkController_(ids, refresh) {
   var requestsById = {}; // RequestID -> request object, for summing totals
   var action = null; // { targetStage, label }, or null when not eligible for the current filter
+  var currentSelection = []; // array of selected RequestIDs, kept in sync by updateSelection
 
   // Called at the top of every load*'s render — resets selection state and
   // shows/hides the bar for the current filter/role combination.
@@ -426,6 +431,7 @@ function makeBulkController_(ids, refresh) {
   }
 
   function updateSelection(selectedIds) {
+    currentSelection = selectedIds;
     var total = 0;
     selectedIds.forEach(function (id) {
       var req = requestsById[id];
@@ -433,16 +439,18 @@ function makeBulkController_(ids, refresh) {
     });
     $(ids.summary).textContent = selectedIds.length + ' selected — Total ' + formatCurrency(total);
     $(ids.btn).disabled = selectedIds.length === 0;
-    $(ids.btn).dataset.selectedIds = JSON.stringify(selectedIds);
+    $(ids.btnReject).disabled = selectedIds.length === 0;
   }
 
-  function handleClick() {
-    var btn = $(ids.btn);
+  // Shared by both the forward-advance button and the Reject button — same
+  // confirm/password-gate/sequential-processing/cache-patch pattern, only
+  // the target stage, confirm wording, and which buttons get disabled differ.
+  function processBatch(targetStage, actionLabel, activeBtn, otherBtn) {
     var errorEl = $(ids.error);
     clearMessage(errorEl);
     if (!action) return;
 
-    var selectedIds = JSON.parse(btn.dataset.selectedIds || '[]');
+    var selectedIds = currentSelection.slice();
     if (!selectedIds.length) return;
 
     var total = selectedIds.reduce(function (sum, id) {
@@ -451,18 +459,18 @@ function makeBulkController_(ids, refresh) {
     }, 0);
 
     var confirmed = window.confirm(
-      action.label + ' ' + selectedIds.length + ' request(s) totalling ' + formatCurrency(total) + '?'
+      actionLabel + ' ' + selectedIds.length + ' request(s) totalling ' + formatCurrency(total) + '?'
     );
     if (!confirmed) return;
 
     if (!ensureApproverPassword_()) return; // cancelled
 
     var remarks = $(ids.remarks).value.trim();
-    btn.disabled = true;
+    activeBtn.disabled = true;
+    otherBtn.disabled = true;
     $(ids.label).textContent = 'Processing...';
 
     var failures = [];
-    var targetStage = action.targetStage;
 
     // Sequential, not Promise.all — avoids hammering Apps Script/LockService
     // with concurrent calls, and keeps per-request error attribution simple.
@@ -485,14 +493,25 @@ function makeBulkController_(ids, refresh) {
         var succeeded = selectedIds.length - failures.length;
         if (failures.length) {
           currentApprover.password = null; // can't tell if a stale password caused a failure — re-prompt next time
-          setMessage(errorEl, succeeded + ' advanced, ' + failures.length + ' failed: ' + failures.join('; '), true);
+          setMessage(errorEl, succeeded + ' processed, ' + failures.length + ' failed: ' + failures.join('; '), true);
         }
         refresh();
       });
   }
 
+  function handleClick() {
+    if (!action) return;
+    processBatch(action.targetStage, action.label, $(ids.btn), $(ids.btnReject));
+  }
+
+  function handleRejectClick() {
+    if (!action) return;
+    processBatch('Rejected', 'Reject', $(ids.btnReject), $(ids.btn));
+  }
+
   function wireClick() {
     $(ids.btn).addEventListener('click', handleClick);
+    $(ids.btnReject).addEventListener('click', handleRejectClick);
   }
 
   return { reset: reset, updateSelection: updateSelection, wireClick: wireClick };
@@ -500,12 +519,14 @@ function makeBulkController_(ids, refresh) {
 
 var queueBulkController_ = makeBulkController_({
   bar: 'bulk-action-bar', summary: 'bulk-selection-summary', remarks: 'bulk-remarks',
-  btn: 'btn-bulk-advance', label: 'bulk-advance-label', error: 'bulk-action-error'
+  btn: 'btn-bulk-advance', label: 'bulk-advance-label', btnReject: 'btn-bulk-reject',
+  error: 'bulk-action-error'
 }, function () { loadAdminRequests(); });
 
 var historyBulkController_ = makeBulkController_({
   bar: 'bulk-action-bar-history', summary: 'bulk-selection-summary-history', remarks: 'bulk-remarks-history',
-  btn: 'btn-bulk-advance-history', label: 'bulk-advance-label-history', error: 'bulk-action-error-history'
+  btn: 'btn-bulk-advance-history', label: 'bulk-advance-label-history', btnReject: 'btn-bulk-reject-history',
+  error: 'bulk-action-error-history'
 }, function () { loadAdminHistory(); });
 
 // CSV field escaping: quote-wraps any field containing a comma, quote, or
