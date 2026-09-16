@@ -59,10 +59,63 @@ This is **two independently deployed halves that only communicate over HTTP**, n
 ## Recently completed (verify in a real browser before considering fully done)
 
 Items 1-6 below (submission window, bulk approve/disburse, admin tabs, audit filters,
-sequential IDs, export PDF fix) are **deployed live** — `clasp deploy -i` was run against
-deployment `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`
-(now `@34`) and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100%
-frontend, no backend push/deploy needed — live as soon as the static files are served.
+sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) are
+**deployed live** — `clasp deploy -i` was run against deployment
+`AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg` (now `@35`)
+and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
+no backend push/deploy needed — live as soon as the static files are served.
+
+10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
+    submission block.** New backend file `ExemptionService.gs` (whitelisted in
+    `.claspignore`) and a new `SubmissionExemptions` sheet tab (`ExemptionID, EmployeeID,
+    EmployeeName, GrantedBy, GrantedDate, ExpiresAt, RevokedBy, RevokedDate`), created by
+    re-running `setupSheets()`. An Authorizer searches an employee (reusing
+    `MealAllowanceService.gs`'s previously-unused `searchEmployeesForUtility`) on a new
+    "Submission Exemption" tab in `admin.html`, gated to `currentApprover.role ===
+    'Authorizer'` only (the opposite shape of gate from the existing history tab's negative
+    `!== 'Approver'` check — this one is positive, since granting a bypass is specifically
+    an Authorizer-level power). Granting calls `grantSubmissionExemption(employeeId, userId,
+    password)`, which resolves credentials via the same `getApproverByCredentials_` +
+    hardcoded `ROLE_AUTHORIZER` gate every other mutation in this app uses, then — inside
+    `LockService.getScriptLock()` — soft-revokes any existing active exemption for that
+    employee first (**re-grant always replaces with a fresh 1-hour window**, never
+    stacks/merges) before appending a new row with `ExpiresAt = now + 1 hour`. Revoke is
+    always a soft update (`RevokedBy`/`RevokedDate` stamped, row never deleted), so the
+    sheet doubles as a full audit trail, matching how `Requests` never deletes rows either.
+    `Validation.gs`'s `submissionWindowError_()` (the single call site, from
+    `validateSubmission_`) now takes an `employeeId` param and checks
+    `getActiveExemptionForEmployee_(employeeId)` before blocking Thu/Fri — "active" is a
+    derived rule (`RevokedDate` blank AND `ExpiresAt > now`), checked lazily on every call,
+    no cron/trigger involved. The Authorizer's panel also shows a live list of every
+    currently-active exemption (`getActiveSubmissionExemptions`, sorted soonest-expiring
+    first) with a cosmetic client-side `setInterval` countdown (30s tick, only while that
+    tab is showing) and a per-row manual Revoke button
+    (`revokeSubmissionExemption(exemptionId, userId, password)`) — all three of these were
+    explicit answers to clarifying questions asked before planning (replace-on-regrant,
+    show-the-list, allow-manual-revoke). On the employee side, `employee.js`'s
+    `applySubmissionWindowState_()` and the actual submit-click guard in
+    `handleSubmitRequest()` both became exemption-aware via a new
+    `checkMySubmissionExemption(employeeId)` read action — **fails closed** on any error
+    (unlike this app's fail-open routing fallback elsewhere, which is a UX convenience, not
+    an authorization gate), so a check failure can only ever produce a wrongly-blocked
+    submit, never a wrongly-allowed one; `Validation.gs` remains the real authority either
+    way. Four new `API_ACTIONS` entries in `Code.gs`; `checkMySubmissionExemption` and
+    `getActiveSubmissionExemptions` added to `common.js`'s `READ_ONLY_ACTIONS` (GET, no
+    credentials); `grantSubmissionExemption`/`revokeSubmissionExemption` stay POST, same as
+    `advanceRequestStage`. Tab/panel label is "Submission Exemption" (renamed from an
+    initial "Emergency Exemption" per the user's own follow-up ask — code-level identifiers
+    like `ExemptionService.gs`/`SubmissionExemptions` were kept as-is, only user-facing text
+    changed).
+    - **Verified**: `node --check` on all touched frontend files; a Node simulation of the
+      active/expired/revoked/re-grant-replaces/non-Thu-Fri-never-blocks logic (mirroring
+      `isExemptionRowActive_`/`submissionWindowError_`) all passed; live `curl` smoke test
+      against the deployed `/exec` URL confirmed `getActiveSubmissionExemptions` returns
+      `[]` only after `setupSheets()` was re-run to create the `SubmissionExemptions` tab
+      (it correctly errored with `"Sheet not found"` beforehand, confirming the code path is
+      real, not silently no-op-ing).
+    - **Not yet checked in a real browser**: the actual Authorizer search → grant → see-in-
+      list → countdown → revoke flow, and confirming an exempted employee's Submit button
+      actually re-enables and a real submission succeeds during a live Thu/Fri window.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
@@ -332,4 +385,4 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
 
 ## Security model (intentional, not an oversight)
 
-The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the nine `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage` and `updateLineItemAmount` are somewhat better: both require a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the current stage requires (`REQUIRED_ROLE_BY_STATUS`) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.
+The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.

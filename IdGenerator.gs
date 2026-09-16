@@ -27,3 +27,10 @@ function generateMealAllowanceId_() {
   var rand = Math.floor(100 + Math.random() * 900);
   return 'MA-' + stamp + '-' + rand;
 }
+
+function generateExemptionId_() {
+  var now = new Date();
+  var stamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss');
+  var rand = Math.floor(100 + Math.random() * 900);
+  return 'EXM-' + stamp + '-' + rand;
+}

@@ -249,6 +249,45 @@ input[type="file"] { min-height: auto; font-size: 0.85rem; padding: 8px 0; borde
 .li-location-suggestions li.active {
   background: var(--color-muted-bg);
 }
+/* ---- Submission Exemption panel (admin.html) ---- */
+.exemption-search-results {
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.exemption-search-results:empty { border: none; }
+.exemption-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+}
+.exemption-result-row:last-child { border-bottom: none; }
+.exemption-result-row:hover { background: var(--color-muted-bg); }
+
+.exemption-active-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.exemption-active-row:last-child { border-bottom: none; }
+.exemption-active-row .name { font-family: var(--font-heading); font-weight: 600; }
+.exemption-countdown {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-secondary);
+  min-width: 90px;
+  text-align: right;
+}
+
 .field-row {
   display: flex;
   gap: var(--space-4);

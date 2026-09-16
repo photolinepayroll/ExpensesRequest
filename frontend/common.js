@@ -42,6 +42,16 @@ function formatDateDisplay(value) {
   return d.toLocaleDateString();
 }
 
+// Used by the Authorizer's Submission Exemption panel and the employee-side
+// exemption banner to show a plain clock time ("2:45 PM"), not a full date —
+// an exemption only ever lasts 1 hour so the date itself is never in question.
+function formatTimeDisplay(value) {
+  if (!value) return '';
+  var d = new Date(value);
+  if (isNaN(d.getTime())) return String(value);
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 // Renders a single date, or (when a cut-off end date is present, i.e. a
 // Timesheet line) a "start – end" range. Shared by buildLineItemsHtml_, the
 // receipt modal, and admin.js's CSV/print-report builders.
@@ -744,7 +754,8 @@ function readFileAsBase64(file) {
 // GET (no CORS preflight). Everything else — file uploads, status changes —
 // goes over POST with a text/plain body, which also avoids a preflight
 // (Apps Script has no way to answer an OPTIONS request).
-var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForPayroll', 'searchEmployeesForUtility'];
+var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForPayroll', 'searchEmployeesForUtility',
+  'getActiveSubmissionExemptions', 'checkMySubmissionExemption'];
 
 // Shared network layer under both fetchJsonWithRetry_ (Apps Script RPCs) and
 // fetchTextWithRetry_ (published-CSV reads): a plain fetch() rejects outright

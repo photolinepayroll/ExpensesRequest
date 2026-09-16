@@ -17,22 +17,32 @@ function setAdminTab(tab) {
   $('tab-admin-queue').setAttribute('aria-selected', String(tab === 'queue'));
   $('tab-admin-history').classList.toggle('active', tab === 'history');
   $('tab-admin-history').setAttribute('aria-selected', String(tab === 'history'));
+  $('tab-admin-exemptions').classList.toggle('active', tab === 'exemptions');
+  $('tab-admin-exemptions').setAttribute('aria-selected', String(tab === 'exemptions'));
 
   $('view-admin-queue').classList.toggle('hidden', tab !== 'queue');
   $('view-admin-history').classList.toggle('hidden', tab !== 'history');
+  $('view-admin-exemptions').classList.toggle('hidden', tab !== 'exemptions');
+
+  stopExemptionCountdown_(); // only ticks while its own tab is actually showing
 
   if (tab === 'queue') loadAdminRequests();
-  else loadAdminHistory();
+  else if (tab === 'history') loadAdminHistory();
+  else loadActiveExemptions();
 }
 
 // The "Reviewed & Disbursed" tab (permanent audit history + the
 // Authorizer's Disburse action + Export/Print Preview) is only relevant to
 // Reviewer/Authorizer roles — an Approver's only actionable stage is
-// Pending, on the Liquidation Requests tab. Called right after login/session
-// restore, once currentApprover is known.
+// Pending, on the Liquidation Requests tab. "Submission Exemption" is the
+// opposite shape of gate — visible to Authorizer only, not "everyone except
+// one role" — since granting a submission-window bypass is specifically an
+// Authorizer-level power, not something Reviewers/Approvers should even see.
+// Called right after login/session restore, once currentApprover is known.
 function applyAdminTabVisibility_() {
   var showHistoryTab = currentApprover.role !== 'Approver';
   $('tab-admin-history').classList.toggle('hidden', !showHistoryTab);
+  $('tab-admin-exemptions').classList.toggle('hidden', currentApprover.role !== 'Authorizer');
 }
 
 // Refreshes whichever tab's list is currently showing — used after any
@@ -50,6 +60,7 @@ function initAdminView() {
   });
   $('link-logout').addEventListener('click', function (e) {
     e.preventDefault();
+    stopExemptionCountdown_();
     currentApprover = null;
     sessionStorage.removeItem(SESSION_KEY_APPROVER);
     $('input-approver-userid').value = '';
@@ -63,6 +74,7 @@ function initAdminView() {
   $('admin-history-date-to').addEventListener('change', loadAdminHistory);
   $('tab-admin-queue').addEventListener('click', function () { setAdminTab('queue'); });
   $('tab-admin-history').addEventListener('click', function () { setAdminTab('history'); });
+  $('tab-admin-exemptions').addEventListener('click', function () { setAdminTab('exemptions'); });
   queueBulkController_.wireClick();
   historyBulkController_.wireClick();
 
@@ -738,6 +750,170 @@ function buildExportReportHtml_(requests) {
     receiptPagesHtml +
     missingHtml +
     '</body></html>';
+}
+
+// ---- "Submission Exemption" tab — Authorizer-only. Search an employee,
+// grant them a 1-hour bypass of the Thu/Fri submission block (ExemptionService.gs),
+// and see/revoke everyone currently exempted. ----
+
+var exemptionCountdownTimer_ = null;
+var exemptionActiveRows_ = []; // last-fetched active list, re-rendered each countdown tick
+
+function initExemptionsTab_() {
+  var searchInput = $('exemption-employee-search');
+  var searchTimer = null;
+  searchInput.addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    var query = searchInput.value.trim();
+    if (!query) {
+      $('exemption-search-results').innerHTML = '';
+      return;
+    }
+    searchTimer = setTimeout(function () { searchExemptionEmployees_(query); }, 300);
+  });
+}
+
+function searchExemptionEmployees_(query) {
+  runServer('searchEmployeesForUtility', query)
+    .then(renderExemptionSearchResults_)
+    .catch(function () { $('exemption-search-results').innerHTML = ''; });
+}
+
+function renderExemptionSearchResults_(results) {
+  var container = $('exemption-search-results');
+  if (!results.length) {
+    container.innerHTML = '<p class="muted">No matching employees.</p>';
+    return;
+  }
+  container.innerHTML = '<div class="exemption-search-results">' +
+    results.map(function (emp) {
+      return '<div class="exemption-result-row" data-employee-id="' + escapeHtml_(emp.EmployeeID) + '">' +
+        '<span>' + escapeHtml_(emp.Name) + '</span>' +
+        '<span class="muted">' + escapeHtml_(emp.EmployeeID) + '</span>' +
+        '</div>';
+    }).join('') + '</div>';
+
+  container.querySelectorAll('.exemption-result-row').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var empId = row.getAttribute('data-employee-id');
+      var empName = row.querySelector('span').textContent;
+      grantExemptionFor_(empId, empName);
+    });
+  });
+}
+
+function grantExemptionFor_(employeeId, employeeName) {
+  var errorEl = $('exemption-grant-error');
+  var successEl = $('exemption-grant-success');
+  clearMessage(errorEl);
+  clearMessage(successEl);
+
+  if (!ensureApproverPassword_()) return; // cancelled
+
+  runServer('grantSubmissionExemption', employeeId, currentApprover.userId, currentApprover.password)
+    .then(function (result) {
+      if (!result.success) {
+        currentApprover.password = null; // can't tell if the password was the problem — re-prompt next time
+        setMessage(errorEl, result.error, true);
+        return;
+      }
+      setMessage(successEl, employeeName + ' may now submit until ' + formatTimeDisplay(result.expiresAt) + '.', false);
+      $('exemption-employee-search').value = '';
+      $('exemption-search-results').innerHTML = '';
+      loadActiveExemptions();
+    })
+    .catch(function (err) {
+      currentApprover.password = null;
+      setMessage(errorEl, err.message, true);
+    });
+}
+
+function loadActiveExemptions() {
+  var container = $('exemption-active-list');
+  runServer('getActiveSubmissionExemptions')
+    .then(function (rows) {
+      exemptionActiveRows_ = rows;
+      renderActiveExemptions_();
+      startExemptionCountdown_();
+    })
+    .catch(function (err) {
+      container.innerHTML = '<div class="msg msg-error" role="alert">' + MSG_ICON_ERROR + '<span>Failed to load: ' + err.message + '</span></div>';
+    });
+}
+
+function renderActiveExemptions_() {
+  var container = $('exemption-active-list');
+  if (!exemptionActiveRows_.length) {
+    container.innerHTML = '<p class="muted">No active exemptions right now.</p>';
+    return;
+  }
+  container.innerHTML = exemptionActiveRows_.map(function (row) {
+    var remainingMs = new Date(row.ExpiresAt).getTime() - Date.now();
+    return '<div class="exemption-active-row" data-exemption-id="' + escapeHtml_(row.ExemptionID) + '">' +
+      '<div><span class="name">' + escapeHtml_(row.EmployeeName) + '</span> ' +
+      '<span class="muted">(' + escapeHtml_(row.EmployeeID) + ')</span><br>' +
+      '<span class="muted">Granted by ' + escapeHtml_(row.GrantedBy) + '</span></div>' +
+      '<span class="exemption-countdown">' + formatCountdown_(remainingMs) + '</span>' +
+      '<button class="btn btn-danger btn-solid btn-small" type="button">Revoke</button>' +
+      '</div>';
+  }).join('');
+
+  container.querySelectorAll('.exemption-active-row').forEach(function (rowEl) {
+    rowEl.querySelector('button').addEventListener('click', function () {
+      revokeExemption_(rowEl.getAttribute('data-exemption-id'));
+    });
+  });
+}
+
+function revokeExemption_(exemptionId) {
+  var errorEl = $('exemption-grant-error');
+  clearMessage(errorEl);
+  if (!ensureApproverPassword_()) return; // cancelled
+
+  runServer('revokeSubmissionExemption', exemptionId, currentApprover.userId, currentApprover.password)
+    .then(function (result) {
+      if (!result.success) {
+        currentApprover.password = null;
+        setMessage(errorEl, result.error, true);
+        return;
+      }
+      loadActiveExemptions();
+    })
+    .catch(function (err) {
+      currentApprover.password = null;
+      setMessage(errorEl, err.message, true);
+    });
+}
+
+// Purely cosmetic ticking display — never writes anything, and a row it
+// misses by a beat is still caught by the server's own lazy ExpiresAt check
+// on the next real read. 30s is plenty granular for a 1-hour window.
+function formatCountdown_(remainingMs) {
+  if (remainingMs <= 0) return 'Expired';
+  var totalMinutes = Math.floor(remainingMs / 60000);
+  var hours = Math.floor(totalMinutes / 60);
+  var minutes = totalMinutes % 60;
+  return (hours > 0 ? hours + 'h ' : '') + minutes + 'm left';
+}
+
+function startExemptionCountdown_() {
+  stopExemptionCountdown_();
+  exemptionCountdownTimer_ = setInterval(function () {
+    var stillActive = exemptionActiveRows_.filter(function (row) {
+      return new Date(row.ExpiresAt).getTime() - Date.now() > 0;
+    });
+    if (stillActive.length !== exemptionActiveRows_.length) {
+      exemptionActiveRows_ = stillActive; // let an expired row quietly drop off the visible list
+    }
+    renderActiveExemptions_();
+  }, 30000);
+}
+
+function stopExemptionCountdown_() {
+  if (exemptionCountdownTimer_) {
+    clearInterval(exemptionCountdownTimer_);
+    exemptionCountdownTimer_ = null;
+  }
 }
 
 function initExportButtons_() {

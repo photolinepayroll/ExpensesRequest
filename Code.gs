@@ -17,7 +17,11 @@ var API_ACTIONS = {
   updateLineItemAmount: updateLineItemAmount,
   loginApprover: loginApprover,
   searchEmployeesForUtility: searchEmployeesForUtility,
-  saveMealAllowanceRecord: saveMealAllowanceRecord
+  saveMealAllowanceRecord: saveMealAllowanceRecord,
+  grantSubmissionExemption: grantSubmissionExemption,
+  revokeSubmissionExemption: revokeSubmissionExemption,
+  getActiveSubmissionExemptions: getActiveSubmissionExemptions,
+  checkMySubmissionExemption: checkMySubmissionExemption
 };
 
 function doGet(e) {

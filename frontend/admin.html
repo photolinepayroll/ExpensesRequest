@@ -58,6 +58,7 @@
       <div class="tabs" role="tablist" aria-label="Approver sections">
         <button class="tab-btn active" id="tab-admin-queue" type="button" role="tab" aria-selected="true">Liquidation Requests</button>
         <button class="tab-btn" id="tab-admin-history" type="button" role="tab" aria-selected="false">Reviewed &amp; Disbursed</button>
+        <button class="tab-btn hidden" id="tab-admin-exemptions" type="button" role="tab" aria-selected="false">Submission Exemption</button>
       </div>
 
       <div id="view-admin-queue">
@@ -143,6 +144,26 @@
           </div>
         </div>
       </div>
+
+      <div id="view-admin-exemptions" class="hidden">
+        <div class="card">
+          <h2>Grant Submission Exemption</h2>
+          <p class="muted">Lets one employee submit outside the normal Saturday–Wednesday window. Valid for 1 hour from the moment it's granted.</p>
+          <div class="field hero-field">
+            <label for="exemption-employee-search">Search employee (name or Biometric ID)</label>
+            <input type="text" id="exemption-employee-search" autocomplete="off">
+          </div>
+          <div id="exemption-search-results"></div>
+          <div class="msg msg-error hidden" id="exemption-grant-error" role="alert"></div>
+          <div class="msg msg-success hidden" id="exemption-grant-success" role="status"></div>
+        </div>
+        <div class="card">
+          <h2>Active Exemptions</h2>
+          <div id="exemption-active-list">
+            <p class="muted">Loading...</p>
+          </div>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -153,6 +174,7 @@
   <script>
     initAdminView();
     initExportButtons_();
+    initExemptionsTab_();
   </script>
 </body>
 </html>

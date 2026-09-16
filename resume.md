@@ -486,6 +486,71 @@ for the exact done/not-done breakdown, summarized here:**
       the new receipt-caption line all still need a manual pass. `CLAUDE.md`/`resume.md` updated
       and this session's changes committed/pushed to GitHub as the user's explicit next ask.
 
+27. New session, user asked for an Authorizer-only emergency escape hatch from the existing
+    Sat–Wed submission window: search an employee, grant them a 1-hour, self-expiring
+    exemption so they can submit during the normally-blocked Thu/Fri window. Planned via
+    plan mode: an Explore agent first mapped every existing pattern to reuse (credential/
+    role-gate shape from `advanceRequestStage`, sheet-migration pattern, the
+    already-unused-but-functional `searchEmployeesForUtility`), then three clarifying
+    questions were asked and answered before writing the plan — re-granting an already-
+    exempted employee **replaces** with a fresh 1-hour window (no merge/reject); the
+    Authorizer's panel **shows a live list** of everyone currently exempted, not just a bare
+    grant form; and the Authorizer can **manually revoke** an active exemption early via a
+    per-row button, not only let it expire naturally. Built and deployed same session:
+    - New backend file `ExemptionService.gs` (whitelisted in `.claspignore`) and a new
+      `SubmissionExemptions` sheet tab, following every existing convention exactly:
+      `getActiveExemptionForEmployee_`/`isExemptionRowActive_` derive "active" as
+      `RevokedDate` blank AND `ExpiresAt > now` (no boolean status column); revoke is
+      always a soft update, never a row delete, so the sheet is its own audit trail;
+      `grantSubmissionExemption`/`revokeSubmissionExemption` mirror `advanceRequestStage`'s
+      exact credential-resolve → role-gate → `LockService` pattern, hardcoded to
+      `ROLE_AUTHORIZER` rather than looked up from a status map since this isn't a
+      stage-advance action.
+    - `Validation.gs`'s `submissionWindowError_()` — the single call site, from
+      `validateSubmission_` — changed from zero-arg to accepting `employeeId`, checking for
+      an active exemption before returning the Thu/Fri block message. Purely a lazy
+      timestamp comparison at call time — no cron, no trigger, nothing that "closes" an
+      exemption except the next read simply no longer counting it as active.
+    - `admin.html`/`admin.js` gained a new tab (initially labeled "Emergency Exemption",
+      renamed to **"Submission Exemption"** after the user asked for a plainer label
+      following a short suggestions-and-pick exchange — only user-facing text changed, the
+      file/sheet/function names stayed as `ExemptionService.gs`/`SubmissionExemptions`/etc.),
+      gated to `currentApprover.role === 'Authorizer'` only — a **positive** role check,
+      the opposite shape from the existing history tab's negative `!== 'Approver'` gate,
+      since granting a submission bypass is specifically an Authorizer-level power nobody
+      else should even see the option for. Employee search reuses
+      `searchEmployeesForUtility` (`MealAllowanceService.gs`) — its first real frontend
+      consumer, previously defined but completely unused. The active-exemptions list has a
+      purely cosmetic client-side 30-second countdown (`setInterval`, only ticking while
+      that tab is actually showing, cleared on tab switch/logout) — the server-side
+      timestamp comparison is what's actually authoritative regardless of any client drift.
+    - `employee.js`'s submission-window UX mirror (`applySubmissionWindowState_` and the
+      real submit-click guard in `handleSubmitRequest`) became exemption-aware via a new
+      `checkMySubmissionExemption` read action, deliberately **failing closed** on any
+      error — unlike this app's fail-open routing fallback elsewhere (a UX convenience),
+      this is a security-relevant gate, so a check failure should only ever produce a
+      wrongly-blocked submit, never a wrongly-allowed one; `Validation.gs` stays the real
+      authority regardless of what this client mirror shows.
+    - `Code.gs` gained 4 new `API_ACTIONS`; `common.js`'s `READ_ONLY_ACTIONS` gained the 2
+      pure-read ones (`checkMySubmissionExemption`, `getActiveSubmissionExemptions`) so they
+      route via GET.
+    - **Verified**: `node --check` passed on every touched frontend file; a throwaway Node
+      simulation (scratchpad, not committed) of the active/expired/revoked/re-grant-
+      replaces/non-Thu-Fri-never-blocks logic all passed. Pushed (`clasp push -f`, confirmed
+      `ExemptionService.gs` was actually in the uploaded file list — the `.claspignore`
+      allowlist footgun this repo has hit before) and deployed live (`clasp deploy -i`
+      against the existing deployment ID, now `@35`). `setupSheets()` was re-run by the user
+      directly in the Apps Script editor (execution log confirmed "Setup complete." with no
+      errors) to create the `SubmissionExemptions` tab — a live `curl` smoke test against
+      `getActiveSubmissionExemptions` failed with `"Sheet not found"` *before* that run and
+      returned `[]` correctly *after*, confirming both that the deployed code path is real
+      (not silently no-op-ing) and that the tab now exists.
+    - **Not yet done**: the actual Authorizer search → grant → see-in-list → countdown →
+      revoke flow has not been exercised in a real browser, nor has an exempted employee's
+      Submit button actually being confirmed to re-enable and a real submission succeeding
+      during a live Thu/Fri window. `CLAUDE.md`/`resume.md` updated and this session's
+      changes committed/pushed to GitHub as the user's explicit next ask.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

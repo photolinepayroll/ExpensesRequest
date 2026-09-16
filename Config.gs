@@ -11,6 +11,7 @@ var SHEET_REQUESTS = 'Requests';
 var SHEET_REQUEST_LINES = 'RequestLines';
 var SHEET_APPROVERS = 'Approvers';
 var SHEET_MEAL_ALLOWANCES = 'MealAllowances';
+var SHEET_SUBMISSION_EXEMPTIONS = 'SubmissionExemptions';
 
 var CATEGORIES = ['Fare', 'Meal Allowance', 'Accommodation', 'Timesheet'];
 

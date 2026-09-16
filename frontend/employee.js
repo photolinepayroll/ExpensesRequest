@@ -259,6 +259,29 @@ function isSubmissionWindowOpen_() {
   return day !== 4 && day !== 5; // closed Thu/Fri
 }
 
+// An Authorizer can grant this employee a 1-hour emergency exemption
+// (see admin.js's Submission Exemption tab / ExemptionService.gs) that
+// bypasses the Thu/Fri block for them specifically. This is only ever
+// consulted when the day check already says the window is closed — no
+// server round-trip on a normal Sat–Wed view. Fails CLOSED on any error
+// (unlike this app's fail-open routing fallback elsewhere, which is a UX
+// convenience, not an authorization gate) — Validation.gs stays the real
+// authority either way, so a false negative here only costs a rejected
+// submit, never a security hole.
+function checkExemptionActive_() {
+  return runServer('checkMySubmissionExemption', currentEmployee.EmployeeID)
+    .then(function (result) { return !!result.exempt; })
+    .catch(function () { return false; });
+}
+
+// Resolves true when the employee may submit right now — either the window
+// is naturally open, or (Thu/Fri only) they currently hold an active
+// emergency exemption.
+function isSubmissionAllowed_() {
+  if (isSubmissionWindowOpen_()) return Promise.resolve(true);
+  return checkExemptionActive_();
+}
+
 function applySubmissionWindowState_() {
   var banner = $('submission-window-banner');
   var submitBtn = $('btn-submit-request');
@@ -267,12 +290,27 @@ function applySubmissionWindowState_() {
     submitBtn.disabled = false;
     return;
   }
-  setMessage(banner,
-    'Submissions are closed on Thursdays and Fridays for processing. Reopens Saturday, ' +
+  submitBtn.disabled = true; // default to closed while the exemption check is in flight
+  var closedMessage = 'Submissions are closed on Thursdays and Fridays for processing. Reopens Saturday, ' +
     formatDateDisplay(computeNextSubmissionOpenSaturday_()) + '. This week\'s disbursement is Friday, ' +
-    formatDateDisplay(computeThisWeekCreditingFriday_()) + '.',
-    true);
-  submitBtn.disabled = true;
+    formatDateDisplay(computeThisWeekCreditingFriday_()) + '.';
+  runServer('checkMySubmissionExemption', currentEmployee.EmployeeID)
+    .then(function (result) {
+      if (!result.exempt) {
+        setMessage(banner, closedMessage, true);
+        submitBtn.disabled = true;
+        return;
+      }
+      setMessage(banner, 'Submission exemption active — you may submit until ' +
+        formatTimeDisplay(result.expiresAt) + '.', false);
+      submitBtn.disabled = false;
+    })
+    .catch(function () {
+      // Fail closed: an exemption-check failure should not be mistaken for
+      // an active exemption.
+      setMessage(banner, closedMessage, true);
+      submitBtn.disabled = true;
+    });
 }
 
 // ---- New request line items ----
@@ -564,12 +602,23 @@ function handleSubmitRequest() {
   clearMessage(errorEl);
   clearMessage(successEl);
 
-  if (!isSubmissionWindowOpen_()) {
-    applySubmissionWindowState_();
-    setMessage(errorEl, 'Submissions are closed today. See the notice above.', true);
-    return;
-  }
+  // Async, since a closed window might still be allowed via an Authorizer-
+  // granted emergency exemption (checkMySubmissionExemption) — the actual
+  // click-triggered submit, not just the tab-view banner, so this is the
+  // guard that actually matters: a stale/bypassed banner state can't let a
+  // non-exempted employee's click through, since it re-checks here too.
+  // Validation.gs remains the authoritative check regardless of this result.
+  isSubmissionAllowed_().then(function (allowed) {
+    if (!allowed) {
+      applySubmissionWindowState_();
+      setMessage(errorEl, 'Submissions are closed today. See the notice above.', true);
+      return;
+    }
+    proceedWithSubmit_(errorEl, successEl);
+  });
+}
 
+function proceedWithSubmit_(errorEl, successEl) {
   if (!document.querySelectorAll('#line-items-container .line-item-row').length) {
     setMessage(errorEl, 'Add at least one line item.', true);
     return;

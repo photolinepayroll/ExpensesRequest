@@ -33,6 +33,10 @@ function setupSheets() {
      'RegularMealAllowance', 'MidnightAllowance', 'TotalAllowance', 'SubmittedDate', 'PhotoLink',
      'MatchedStore', 'City', 'Town', 'AreaRegion', 'AllowanceSource', 'EndGpsMapLink']);
 
+  createOrMigrateSheet_(ss, SHEET_SUBMISSION_EXEMPTIONS,
+    ['ExemptionID', 'EmployeeID', 'EmployeeName', 'GrantedBy', 'GrantedDate',
+     'ExpiresAt', 'RevokedBy', 'RevokedDate']);
+
   // Remove the default "Sheet1" if it's still empty and unused.
   var defaultSheet = ss.getSheetByName('Sheet1');
   if (defaultSheet && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
