@@ -152,16 +152,18 @@ function loadAdminRequests() {
   var statusFilter = $('admin-status-filter').value;
   var queueStatuses = ['Pending', 'Approved', 'Rejected'];
 
-  // Only Approver-role accounts have their Pending view scoped to what this
-  // specific person is actually meant to approve (a client-side mirror of the
-  // server's category-based routing, common.js's resolveRequiredApprover_ —
-  // display/filtering only; advanceRequestStage/updateLineItemAmount
-  // independently re-verify the same routing server-side on every call, so a
-  // mismatch here can only ever show the wrong list, never approve anything
-  // illegitimately). This reads from the CSV-based joined list
-  // (loadJoinedRequests_) instead of a live getAllRequestsForPayroll call —
-  // can lag a few minutes behind the live sheet, an accepted trade-off for
-  // this read path.
+  // Only Approver-role accounts have this whole tab scoped to what this
+  // specific person is actually meant to approve — applied to every Status
+  // filter option (Pending/Approved/Rejected/All), not just Pending, so an
+  // Approver can also see their own approve history, not just their live
+  // queue (a client-side mirror of the server's category-based routing,
+  // common.js's resolveRequiredApprover_ — display/filtering only;
+  // advanceRequestStage/updateLineItemAmount independently re-verify the
+  // same routing server-side on every call, so a mismatch here can only
+  // ever show the wrong list, never approve anything illegitimately). This
+  // reads from the CSV-based joined list (loadJoinedRequests_) instead of a
+  // live getAllRequestsForPayroll call — can lag a few minutes behind the
+  // live sheet, an accepted trade-off for this read path.
   var scopeToApprover = currentApprover.role === 'Approver' && currentApprover.biometricId;
 
   Promise.all([
@@ -181,7 +183,7 @@ function loadAdminRequests() {
           return false;
         }
 
-        if (req.Status === 'Pending' && scopeToApprover) {
+        if (scopeToApprover) {
           var emp = employeeRows.filter(function (e) { return String(e.EmployeeID) === String(req.EmployeeID); })[0];
           var lineLocation = (req.lines && req.lines[0]) ? req.lines[0].BaseLocation : '';
           var routing = resolveRequiredApprover_(
@@ -621,9 +623,19 @@ function buildExportReportHtml_(requests) {
         return;
       }
       var amountCaption = line.Category === 'Timesheet' ? '' : (' — ' + formatCurrency(line.Amount));
+      // Repeats the summary table's ApprovedBy/ReviewedBy/AuthorizedBy on
+      // every receipt page too, so whoever is flipping through printed
+      // receipts doesn't have to page back to the summary table to see who
+      // signed off — ApprovedBy is always present (a prerequisite of both
+      // exportable statuses), ReviewedBy likewise, AuthorizedBy only once
+      // actually Disbursed.
+      var approverParts = ['Approved by ' + req.ApprovedBy];
+      if (req.ReviewedBy) approverParts.push('Reviewed by ' + req.ReviewedBy);
+      if (req.AuthorizedBy) approverParts.push('Authorized by ' + req.AuthorizedBy);
       var item = {
         caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
           formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
+        approvers: approverParts.join(' · '),
         url: driveThumbnailUrl_(line.ReceiptFileURL)
       };
       // Timesheet receipts stay in the 2-per-page fareItems bucket — a
@@ -642,6 +654,7 @@ function buildExportReportHtml_(requests) {
   function receiptCellHtml_(item) {
     return '<div class="receipt-cell">' +
       '<p class="receipt-caption">' + escapeHtml_(item.caption) + '</p>' +
+      '<p class="receipt-approvers">' + escapeHtml_(item.approvers) + '</p>' +
       '<img src="' + escapeHtml_(item.url) + '" alt="Receipt">' +
       '</div>';
   }
@@ -693,13 +706,15 @@ function buildExportReportHtml_(requests) {
     // never depends on the parent's box being "definite" for percentage
     // resolution during pagination.
     '.receipt-page { page-break-before: always; padding-top: 3mm; box-sizing: border-box; }' +
-    '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 4px; }' +
+    '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 2px; }' +
+    '.receipt-approvers { font-size: 9px; color: #64748b; margin: 0 0 4px; }' +
     '.receipt-page-2up { display: flex; flex-direction: column; gap: 4mm; }' +
     '.receipt-page-2up .receipt-cell { height: 124mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 82mm); gap: 3mm; }' +
     '.receipt-page-6up .receipt-cell { height: 82mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
-    '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 3px; }' +
+    '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 2px; }' +
+    '.receipt-page-6up .receipt-approvers { font-size: 7px; margin-bottom: 3px; }' +
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.grand-total-row td { border-top: 2px solid #1e3a5f; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +

@@ -61,8 +61,8 @@ This is **two independently deployed halves that only communicate over HTTP**, n
 Items 1-6 below (submission window, bulk approve/disburse, admin tabs, audit filters,
 sequential IDs, export PDF fix) are **deployed live** — `clasp deploy -i` was run against
 deployment `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`
-(now `@34`) and confirmed via `curl` against the real `/exec` URL. Item 7 is a same-day
-follow-up, 100% frontend, no deploy needed.
+(now `@34`) and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100%
+frontend, no backend push/deploy needed — live as soon as the static files are served.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
@@ -131,6 +131,52 @@ follow-up, 100% frontend, no deploy needed.
      confirm the fix resolves it without touching the other tab's panel. **Not yet checked in a
      real browser** — Prev/Next positioning, arrow-key nav, and bulk-approve/bulk-reject on all
      three bars still need a manual pass.
+
+9. **Mobile "Failed to fetch" resilience, Approver queue routing-scope widened to every status,
+   and approver names added to Print Preview receipt captions.** All 100% frontend
+   (`common.js`, `admin.js`, `admin.html`), no backend push/deploy needed.
+   - **Network resilience**: `common.js`'s `fetchJsonWithRetry_()` previously only retried when
+     the response body was bad JSON (Apps Script's known transient echo-redirect 404) — a real
+     rejected `fetch()` promise (a dropped/unstable connection, common on cellular) propagated
+     straight to the caller as a raw, unactionable `TypeError: Failed to fetch`, and nothing
+     anywhere had a timeout, so a stalled mobile connection could hang indefinitely. New shared
+     `fetchWithRetry_()` wraps every request with a 25s `AbortController` timeout and one silent
+     400ms-backoff retry on actual network failure (not just bad JSON), throwing a friendly
+     `"Connection problem — please check your signal and try again."` after retries are
+     exhausted instead of letting the raw TypeError surface — `employee.js`'s existing
+     `setMessage(errorEl, err.message, true)` call sites needed no changes to pick this up.
+     `fetchJsonWithRetry_` (all RPC calls: login, submit, every mutation) and a new
+     `fetchTextWithRetry_` (the Biometric ID login's CSV lookup, `loadEmployeesCsv_`) both build
+     on it — directly covers the reported "logging in... especially in mobiles" failures. Other
+     bare `fetch()` CSV reads elsewhere in the app (store directory, requests/lines, attendance,
+     store coordinates) were deliberately left untouched — out of scope for this pass.
+   - **Approver queue scoping widened, after a same-session correction**: first pass hid the
+     Status dropdown for Approver-role logins entirely and hardcoded their view to `Pending`
+     only — the user then clarified (in Filipino) that went too far: an Approver should still be
+     able to see requests **they've already approved** (their own history for employees routed
+     to them), not just their live Pending queue. Reverted the dropdown-hiding
+     (`applyAdminTabVisibility_` no longer touches `#admin-status-filter-field`) and instead
+     widened the existing `resolveRequiredApprover_` routing-scope check in
+     `loadAdminRequests()` — previously gated to `req.Status === 'Pending'` only — to apply to
+     every Status filter option (Pending/Approved/Rejected/All), since the routing check itself
+     is stage-independent (resolved from the employee's Department/BaseLocation and the
+     request's own line location, not from `Status`). An Approver switching to "Approved" now
+     sees only the ones they themselves approved, not everyone's. Reviewer/Authorizer's
+     "Reviewed & Disbursed" tab/filter is completely unaffected either way. Purely a
+     client-side *display* refinement, same "client mirrors server, server re-verifies" pattern
+     as the rest of the app — `getAllRequestsForPayroll`'s own Pending-only server-side scope is
+     unchanged.
+   - **Print Preview receipt captions now show who approved**: the summary table already showed
+     `ApprovedBy`/`ReviewedBy`/`AuthorizedBy`, but the individual receipt image pages further
+     down only captioned Request ID/Employee/Date/Category/Amount. `buildExportReportHtml_`
+     now adds a second caption line per receipt — "Approved by X · Reviewed by Y · Authorized by
+     Z" (only showing stages that have actually happened; `ApprovedBy`/`ReviewedBy` are always
+     present since only Reviewed/Authorized statuses are exportable, `AuthorizedBy` only once
+     Disbursed) — reusing the exact field names already on the request object, no backend or
+     CSV-export changes needed.
+   - `node --check` passes on all touched files. **Not yet checked in a real browser** — flaky/
+     throttled-connection retry behavior, the Approver dropdown's per-status scoping, and the
+     new receipt-caption line all still need a manual pass.
 
 <details>
 <summary>Prior session — items 1-6 (submission window, bulk approve/disburse, admin tabs, audit filters, sequential IDs, export PDF fix)</summary>

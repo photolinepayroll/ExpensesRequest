@@ -692,11 +692,7 @@ var employeesCsvCache = null;
 
 function loadEmployeesCsv_() {
   if (employeesCsvCache) return Promise.resolve(employeesCsvCache);
-  return fetch(EMPLOYEES_CSV_URL)
-    .then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.text();
-    })
+  return fetchTextWithRetry_(EMPLOYEES_CSV_URL)
     .then(function (text) {
       employeesCsvCache = csvToObjects_(parseCsv_(text));
       return employeesCsvCache;
@@ -750,6 +746,53 @@ function readFileAsBase64(file) {
 // (Apps Script has no way to answer an OPTIONS request).
 var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForPayroll', 'searchEmployeesForUtility'];
 
+// Shared network layer under both fetchJsonWithRetry_ (Apps Script RPCs) and
+// fetchTextWithRetry_ (published-CSV reads): a plain fetch() rejects outright
+// on a real network failure — a dropped/unstable connection, common on
+// cellular — with no built-in retry or timeout, which is what let a single
+// bad moment on mobile surface as a raw, unactionable "TypeError: Failed to
+// fetch". This wraps every request with (a) a timeout via AbortController, so
+// a stalled mobile connection fails fast and retries instead of hanging
+// indefinitely, and (b) one silent retry (same 400ms backoff already used for
+// the echo-redirect case below) before giving up with a friendly message.
+var FETCH_TIMEOUT_MS = 25000;
+
+function fetchWithRetry_(url, options, attemptsLeft) {
+  if (attemptsLeft === undefined) attemptsLeft = 2;
+  options = options || {};
+
+  var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var fetchOptions = options;
+  var timeoutId = null;
+  if (controller) {
+    fetchOptions = {};
+    for (var key in options) { if (options.hasOwnProperty(key)) fetchOptions[key] = options[key]; }
+    fetchOptions.signal = controller.signal;
+    timeoutId = setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS);
+  }
+
+  return fetch(url, fetchOptions)
+    .then(function (res) {
+      if (timeoutId) clearTimeout(timeoutId);
+      return res;
+    })
+    .catch(function (err) {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (attemptsLeft > 1) {
+        return new Promise(function (resolve) { setTimeout(resolve, 400); })
+          .then(function () { return fetchWithRetry_(url, options, attemptsLeft - 1); });
+      }
+      throw new Error('Connection problem — please check your signal and try again.');
+    });
+}
+
+function fetchTextWithRetry_(url, attemptsLeft) {
+  return fetchWithRetry_(url, undefined, attemptsLeft).then(function (res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  });
+}
+
 // Apps Script's POST/GET flow answers with a 302 to a one-time
 // script.googleusercontent.com "echo" content URL — that hop intermittently
 // 404s right after a fresh deploy or a cold start (confirmed transient: the
@@ -758,7 +801,7 @@ var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForP
 // user-facing error, retry the whole call once, silently, before giving up.
 function fetchJsonWithRetry_(url, options, attemptsLeft) {
   if (attemptsLeft === undefined) attemptsLeft = 2;
-  return fetch(url, options)
+  return fetchWithRetry_(url, options, attemptsLeft)
     .then(function (res) { return res.text(); })
     .then(function (text) {
       try {

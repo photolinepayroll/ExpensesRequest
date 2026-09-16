@@ -440,6 +440,52 @@ for the exact done/not-done breakdown, summarized here:**
       Prev/Next arrows position correctly and don't overlap the details pane on desktop, arrow-key
       navigation, bulk-approve on the Pending queue, and bulk-Reject on all three bars.
 
+26. New session, three more user-reported issues, planned via plan mode with Explore agents +
+    clarifying questions. All 100% frontend (`frontend/common.js`, `frontend/admin.js`,
+    `frontend/admin.html`) — no backend push/deploy needed:
+    - **Mobile "Failed to fetch" fix.** Root-caused via an Explore agent: `common.js`'s
+      `fetchJsonWithRetry_()` only ever retried when the response body was bad JSON (the known
+      transient Apps Script echo-redirect 404) — a genuinely rejected `fetch()` promise (a
+      dropped/unstable cellular connection) propagated straight through as a raw
+      `TypeError: Failed to fetch`, shown to the user verbatim in `employee.js`'s
+      `setMessage(errorEl, err.message, true)` call sites. There was also no timeout anywhere,
+      so a stalled connection could hang indefinitely instead of failing fast. Fixed with a new
+      shared `fetchWithRetry_()`: wraps every request in a 25s `AbortController` timeout plus one
+      silent 400ms-backoff retry on actual network failure (not just bad JSON), and throws a
+      friendly `"Connection problem — please check your signal and try again."` message once
+      retries are exhausted. `fetchJsonWithRetry_` (every RPC call — login, submit, every
+      mutation) and a new `fetchTextWithRetry_` (the Biometric ID login's CSV lookup,
+      `loadEmployeesCsv_`, previously a bare unretried `fetch()`) both build on it.
+    - **Approver queue visibility — two passes, self-corrected mid-session.** First pass (per the
+      user's initial ask, "approvers can see only the list what request they approve"): hid the
+      Status filter dropdown entirely for Approver-role logins and hardcoded their queue view to
+      `Pending` only (`applyAdminTabVisibility_` hiding `#admin-status-filter-field`,
+      `loadAdminRequests()` forcing `statusFilter = 'Pending'`). The user then came back (in
+      Filipino) clarifying that went too far — they also want to see requests **they've already
+      approved**, not just their live Pending queue. Corrected: restored the dropdown (removed
+      the hiding logic) and instead widened the existing `resolveRequiredApprover_` routing-scope
+      check in `loadAdminRequests()` — previously gated to `req.Status === 'Pending'` only — to
+      apply to every Status option (Pending/Approved/Rejected/All), since the check itself is
+      stage-independent (resolved from the employee's Department/BaseLocation and the request's
+      own line location, not from `Status`). End result: an Approver's dropdown still offers all
+      four options, but every one of them is now scoped to only the employees routed to that
+      specific Approver — switching to "Approved" shows their own approval history, not
+      everyone's. Reviewer/Authorizer's separate "Reviewed & Disbursed" tab/filter was untouched
+      by either pass.
+    - **Print Preview: approver names added to each receipt page.** The export report's summary
+      table (page 1) already showed `ApprovedBy`/`ReviewedBy`/`AuthorizedBy` with dates — but the
+      individual receipt image pages further down only captioned Request ID/Employee/Date/
+      Category/Amount, confirmed via an Explore agent before writing any code. Added a second
+      caption line per receipt in `buildExportReportHtml_` — "Approved by X · Reviewed by Y ·
+      Authorized by Z" (only the stages that have actually happened; `ApprovedBy`/`ReviewedBy`
+      always present since only Reviewed/Authorized statuses are exportable, `AuthorizedBy` only
+      once Disbursed) — reusing the exact field names already present on the request object, no
+      backend or CSV changes needed.
+    - `node --check` passes on all touched files. **Not yet checked in a real browser** —
+      throttled/offline-toggle retry behavior, the Approver dropdown's per-status scoping, and
+      the new receipt-caption line all still need a manual pass. `CLAUDE.md`/`resume.md` updated
+      and this session's changes committed/pushed to GitHub as the user's explicit next ask.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.
