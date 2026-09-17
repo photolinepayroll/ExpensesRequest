@@ -7,7 +7,7 @@ function showAdminView(view) {
 
 // Two tabs within view-admin: the live "Liquidation Requests" queue
 // (Pending/Approved/Rejected) and "Reviewed & Disbursed" (history +
-// the Authorizer's Disburse action + Export/Print Preview). Mirrors
+// the Verifier's Disburse action + Export/Print Preview). Mirrors
 // employee.js's setEmployeeTab pattern.
 var currentAdminTab_ = 'queue';
 
@@ -32,17 +32,17 @@ function setAdminTab(tab) {
 }
 
 // The "Reviewed & Disbursed" tab (permanent audit history + the
-// Authorizer's Disburse action + Export/Print Preview) is only relevant to
-// Reviewer/Authorizer roles — an Approver's only actionable stage is
+// Verifier's Disburse action + Export/Print Preview) is only relevant to
+// Reviewer/Verifier roles — an Approver's only actionable stage is
 // Pending, on the Liquidation Requests tab. "Submission Exemption" is the
-// opposite shape of gate — visible to Authorizer only, not "everyone except
-// one role" — since granting a submission-window bypass is specifically an
-// Authorizer-level power, not something Reviewers/Approvers should even see.
+// opposite shape of gate — visible to Verifier only, not "everyone except
+// one role" — since granting a submission-window bypass is specifically a
+// Verifier-level power, not something Reviewers/Approvers should even see.
 // Called right after login/session restore, once currentApprover is known.
 function applyAdminTabVisibility_() {
   var showHistoryTab = currentApprover.role !== 'Approver';
   $('tab-admin-history').classList.toggle('hidden', !showHistoryTab);
-  $('tab-admin-exemptions').classList.toggle('hidden', currentApprover.role !== 'Authorizer');
+  $('tab-admin-exemptions').classList.toggle('hidden', currentApprover.role !== 'Verifier');
 }
 
 // Refreshes whichever tab's list is currently showing — used after any
@@ -250,7 +250,7 @@ function loadAdminRequests() {
     });
 }
 
-// "Reviewed & Disbursed" tab — Reviewed (still actionable: the Authorizer
+// "Reviewed & Disbursed" tab — Reviewed (still actionable: the Verifier
 // disburses from here, single + bulk) and Authorized/"Disbursed" (pure
 // history). Both statuses are already unscoped server-side (no category/
 // store routing check applies past the Approved stage), so no routing
@@ -317,7 +317,7 @@ var ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 var NEXT_ACTION_BY_STATUS = {
   Pending: { targetStage: 'Approved', label: 'Approve' },
   Approved: { targetStage: 'Reviewed', label: 'Mark Reviewed' },
-  Reviewed: { targetStage: 'Authorized', label: 'Authorize Disbursement' }
+  Reviewed: { targetStage: 'Authorized', label: 'Verify Disbursement' }
 };
 
 // Mirrors RequestService.gs's REQUIRED_ROLE_BY_STATUS. This is what actually
@@ -328,7 +328,7 @@ var NEXT_ACTION_BY_STATUS = {
 var REQUIRED_ROLE_BY_STATUS = {
   Pending: 'Approver',
   Approved: 'Reviewer',
-  Reviewed: 'Authorizer'
+  Reviewed: 'Verifier'
 };
 
 // Mirrors the same condition that decides whether to show the Approve/
@@ -654,7 +654,7 @@ function buildExportReportHtml_(requests) {
       // actually Disbursed.
       var approverParts = ['Approved by ' + req.ApprovedBy];
       if (req.ReviewedBy) approverParts.push('Reviewed by ' + req.ReviewedBy);
-      if (req.AuthorizedBy) approverParts.push('Authorized by ' + req.AuthorizedBy);
+      if (req.AuthorizedBy) approverParts.push('Verified by ' + req.AuthorizedBy);
       var item = {
         caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
           formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
@@ -756,14 +756,14 @@ function buildExportReportHtml_(requests) {
     '<p class="subtitle">Generated ' + escapeHtml_(now) + '</p>' +
     '<table><thead><tr>' +
     '<th>Request ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
-    '<th>Approved</th><th>Reviewed</th><th>Authorized</th><th>Crediting Date</th>' +
+    '<th>Approved</th><th>Reviewed</th><th>Verified</th><th>Crediting Date</th>' +
     '</tr></thead><tbody>' + summaryRows + '</tbody>' + grandTotalRow + '</table>' +
     receiptPagesHtml +
     missingHtml +
     '</body></html>';
 }
 
-// ---- "Submission Exemption" tab — Authorizer-only. Search an employee,
+// ---- "Submission Exemption" tab — Verifier-only. Search an employee,
 // grant them a 1-hour bypass of the Thu/Fri submission block (ExemptionService.gs),
 // and see/revoke everyone currently exempted. ----
 

@@ -121,7 +121,7 @@ function getMyRequests(employeeId) {
 // StoreDirectoryService.gs's resolveRequiredApprover_), so an Approver
 // logged in for e.g. Cris's Technical queue doesn't see requests meant for
 // Jayriel's Area Head queue or a per-store Area Head's own queue. Approved/
-// Reviewed/etc. rows are never filtered by this — Reviewer/Authorizer stay
+// Reviewed/etc. rows are never filtered by this — Reviewer/Verifier stay
 // unscoped, same as advanceRequestStage. A request whose required approver
 // can't be resolved (directory unreachable, unmapped employee) is still
 // shown to everyone — same fail-open fallback used at write time.

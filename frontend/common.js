@@ -42,7 +42,7 @@ function formatDateDisplay(value) {
   return d.toLocaleDateString();
 }
 
-// Used by the Authorizer's Submission Exemption panel and the employee-side
+// Used by the Verifier's Submission Exemption panel and the employee-side
 // exemption banner to show a plain clock time ("2:45 PM"), not a full date —
 // an exemption only ever lasts 1 hour so the date itself is never in question.
 function formatTimeDisplay(value) {

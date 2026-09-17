@@ -1,5 +1,5 @@
 /**
- * Authorizer-only emergency exemption from the Thu/Fri submission window
+ * Verifier-only emergency exemption from the Thu/Fri submission window
  * (see Validation.gs's submissionWindowError_). An exemption is a row in the
  * SubmissionExemptions sheet, valid for exactly 1 hour from the moment it's
  * granted, checked lazily (ExpiresAt vs. Date.now()) wherever it matters —
@@ -57,7 +57,7 @@ function revokeAllActiveForEmployee_(employeeId, actorName, now) {
 }
 
 // Grants (or re-grants, replacing any existing active exemption) a 1-hour
-// submission-window exemption to one employee. Authorizer-only.
+// submission-window exemption to one employee. Verifier-only.
 function grantSubmissionExemption(employeeId, userId, password) {
   var approverResult = getApproverByCredentials_(userId, password);
   if (!approverResult.found) {
@@ -109,7 +109,7 @@ function grantSubmissionExemption(employeeId, userId, password) {
 }
 
 // Manually revokes one specific exemption by ID before it naturally expires.
-// Authorizer-only.
+// Verifier-only.
 function revokeSubmissionExemption(exemptionId, userId, password) {
   var approverResult = getApproverByCredentials_(userId, password);
   if (!approverResult.found) {
@@ -145,7 +145,7 @@ function revokeSubmissionExemption(exemptionId, userId, password) {
 }
 
 // Read-only: every currently-active exemption, soonest-expiring first.
-// Powers the Authorizer's live list. No credential gate — a plain read, same
+// Powers the Verifier's live list. No credential gate — a plain read, same
 // openness as getAllRequestsForPayroll (see CLAUDE.md's security-model note).
 function getActiveSubmissionExemptions() {
   var now = Date.now();

@@ -7,14 +7,14 @@
 // Thu/Fri for Friday disbursement); the window simply reopens the following
 // Saturday, with no stored cycle state — computeNextCreditingFriday_/
 // computeNextSubmissionOpenSaturday_ (RequestService.gs) are pure date math.
-// An Authorizer can grant a specific employee a 1-hour emergency exemption
+// A Verifier can grant a specific employee a 1-hour emergency exemption
 // (ExemptionService.gs) that bypasses this block for that employee only —
 // checked here, lazily, with no separate expiry mechanism.
 function submissionWindowError_(employeeId) {
   var day = new Date().getDay(); // Sun=0 ... Sat=6, Manila time (script timeZone)
   if (day === 4 || day === 5) { // Thu, Fri
     if (employeeId && getActiveExemptionForEmployee_(employeeId)) {
-      return null; // Authorizer-granted emergency exemption is active
+      return null; // Verifier-granted emergency exemption is active
     }
     var tz = Session.getScriptTimeZone();
     var reopenDate = Utilities.formatDate(computeNextSubmissionOpenSaturday_(), tz, 'MMM d, yyyy');

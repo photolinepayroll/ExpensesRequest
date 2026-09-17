@@ -29,7 +29,7 @@ var STAGE_ORDER = [STATUS_PENDING, STATUS_APPROVED, STATUS_REVIEWED, STATUS_AUTH
 // these roles, looked up from the Approvers sheet via a personal PIN.
 var ROLE_APPROVER = 'Approver';
 var ROLE_REVIEWER = 'Reviewer';
-var ROLE_AUTHORIZER = 'Authorizer';
+var ROLE_AUTHORIZER = 'Verifier';
 
 // Published (Publish to web, CSV) directory mapping each store to its
 // assigned Area Head/Technical/Audit staff (by Biometric ID), plus the 3

@@ -259,7 +259,7 @@ function isSubmissionWindowOpen_() {
   return day !== 4 && day !== 5; // closed Thu/Fri
 }
 
-// An Authorizer can grant this employee a 1-hour emergency exemption
+// A Verifier can grant this employee a 1-hour emergency exemption
 // (see admin.js's Submission Exemption tab / ExemptionService.gs) that
 // bypasses the Thu/Fri block for them specifically. This is only ever
 // consulted when the day check already says the window is closed — no
@@ -602,7 +602,7 @@ function handleSubmitRequest() {
   clearMessage(errorEl);
   clearMessage(successEl);
 
-  // Async, since a closed window might still be allowed via an Authorizer-
+  // Async, since a closed window might still be allowed via a Verifier-
   // granted emergency exemption (checkMySubmissionExemption) — the actual
   // click-triggered submit, not just the tab-view banner, so this is the
   // guard that actually matters: a stale/bypassed banner state can't let a
