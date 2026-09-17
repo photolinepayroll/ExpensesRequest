@@ -737,6 +737,29 @@ function lookupEmployeeFromCsv_(employeeId) {
   });
 }
 
+// Client-side port of MealAllowanceService.gs's searchEmployeesForUtility —
+// used by admin.js's Submission Exemption tab so typing in the search box
+// doesn't round-trip through Apps Script (a full, uncached Employees sheet
+// read plus the GET/redirect/echo-content-URL dance) on every keystroke.
+// Same match rule (ID or Name substring, case-insensitive, Active only, top
+// 15 results) except Active arrives as the CSV text "TRUE" rather than a real
+// Sheets boolean, same as lookupEmployeeFromCsv_ above.
+function searchEmployeesFromCsv_(query) {
+  var q = String(query || '').trim().toLowerCase();
+  if (!q) return Promise.resolve([]);
+  return loadEmployeesCsv_().then(function (rows) {
+    var matches = rows.filter(function (row) {
+      if (String(row.Active).trim().toUpperCase() !== 'TRUE') return false;
+      var id = String(row.EmployeeID || '').toLowerCase();
+      var name = String(row.Name || '').toLowerCase();
+      return id.indexOf(q) !== -1 || name.indexOf(q) !== -1;
+    });
+    return matches.slice(0, 15).map(function (row) {
+      return { EmployeeID: row.EmployeeID, Name: row.Name };
+    });
+  });
+}
+
 function readFileAsBase64(file) {
   return new Promise(function (resolve, reject) {
     var reader = new FileReader();
@@ -810,20 +833,41 @@ function fetchTextWithRetry_(url, attemptsLeft) {
 // exact same call always succeeds on an immediate retry, both via curl/node
 // and manually re-clicking in the browser). Rather than surfacing that as a
 // user-facing error, retry the whole call once, silently, before giving up.
-function fetchJsonWithRetry_(url, options, attemptsLeft) {
+//
+// Separately, a well-formed {success:false, error:'System is busy...'}
+// response means every mutation lost the race for the backend's shared
+// LockService lock under heavy concurrent load (see RequestService.gs) — this
+// is transient, not a real failure, so it gets its own silent retry budget
+// (busyAttemptsLeft) independent of the network/malformed-JSON one above, on
+// an increasing backoff since lock waits there can now run up to ~20s. Any
+// other success:false error (validation, "Request not found", etc.) is never
+// retried — only this specific message is.
+var BUSY_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
+
+function fetchJsonWithRetry_(url, options, attemptsLeft, busyAttemptsLeft) {
   if (attemptsLeft === undefined) attemptsLeft = 2;
+  if (busyAttemptsLeft === undefined) busyAttemptsLeft = BUSY_RETRY_DELAYS_MS.length;
   return fetchWithRetry_(url, options, attemptsLeft)
     .then(function (res) { return res.text(); })
     .then(function (text) {
+      var parsed;
       try {
-        return JSON.parse(text);
+        parsed = JSON.parse(text);
       } catch (parseErr) {
         if (attemptsLeft > 1) {
           return new Promise(function (resolve) { setTimeout(resolve, 400); })
-            .then(function () { return fetchJsonWithRetry_(url, options, attemptsLeft - 1); });
+            .then(function () { return fetchJsonWithRetry_(url, options, attemptsLeft - 1, busyAttemptsLeft); });
         }
         throw new Error('Server returned an unexpected response — please try again.');
       }
+
+      if (parsed && parsed.success === false && /busy/i.test(parsed.error || '') && busyAttemptsLeft > 0) {
+        var delay = BUSY_RETRY_DELAYS_MS[BUSY_RETRY_DELAYS_MS.length - busyAttemptsLeft];
+        return new Promise(function (resolve) { setTimeout(resolve, delay); })
+          .then(function () { return fetchJsonWithRetry_(url, options, attemptsLeft, busyAttemptsLeft - 1); });
+      }
+
+      return parsed;
     });
 }
 

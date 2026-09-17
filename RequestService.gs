@@ -2,27 +2,45 @@
  * Core liquidation request business logic.
  */
 
+// Split into 3 phases to keep the shared script-wide LockService lock held for
+// as little time as possible — Drive receipt uploads are slow external API
+// calls, and prior to this split they ran *inside* the lock, blocking every
+// other queued submit/approve/reject/exemption action (all 5 mutation entry
+// points in this app share one LockService.getScriptLock()). Phases 1 and 3
+// each do only fast, local (PropertiesService/Sheet) work under the lock;
+// Phase 2's Drive I/O runs unlocked in between.
 function submitLiquidationRequest(payload) {
   var validationError = validateSubmission_(payload);
   if (validationError) {
     return { success: false, error: validationError };
   }
 
+  var employeeResult = getEmployeeByID(payload.employeeId);
+  var employee = employeeResult.employee;
+
+  // Phase 1 (short lock): only sequential ID generation (a fast
+  // PropertiesService read-increment-write, see IdGenerator.gs) — resolved
+  // now so Phase 2's Drive folders still land at the normal
+  // <EmployeeID>/<RequestID>/ path.
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(10000);
+    lock.waitLock(20000);
   } catch (e) {
     return { success: false, error: 'System is busy, please try again.' };
   }
-
+  var requestId;
   try {
-    var employeeResult = getEmployeeByID(payload.employeeId);
-    var employee = employeeResult.employee;
-    var requestId = generateRequestId_();
-    var now = new Date();
-    var totalAmount = 0;
+    requestId = generateRequestId_();
+  } finally {
+    lock.releaseLock();
+  }
 
-    payload.lines.forEach(function (line, index) {
+  // Phase 2 (no lock): receipt uploads to Drive happen here, unlocked.
+  var now = new Date();
+  var totalAmount = 0;
+  var lineRows;
+  try {
+    lineRows = payload.lines.map(function (line, index) {
       var lineId = generateLineId_(requestId, index);
       var receiptUrl = '';
 
@@ -37,7 +55,7 @@ function submitLiquidationRequest(payload) {
       var amount = Number(line.amount);
       totalAmount += amount;
 
-      appendRowFromObject_(SHEET_REQUEST_LINES, {
+      return {
         LineID: lineId,
         RequestID: requestId,
         Date: line.date,
@@ -48,7 +66,28 @@ function submitLiquidationRequest(payload) {
         ReceiptFileURL: receiptUrl,
         GpsMapLink: line.gpsMapLink || '',
         CutoffEndDate: line.cutoffEndDate || ''
-      });
+      };
+    });
+  } catch (e) {
+    return { success: false, error: 'Submission failed: ' + e.message };
+  }
+
+  // Phase 3 (short lock again): only the Sheet writes. If this fails after
+  // Phase 2's uploads already succeeded, the uploaded file(s) are orphaned in
+  // Drive (unreferenced by any row) — an accepted tradeoff, not a bug: this
+  // is an internal tool with no test suite, this step has no external calls
+  // so failures here are rare, and adding upload-rollback would add more
+  // Drive API surface to reason about for a very rare failure path.
+  var lock2 = LockService.getScriptLock();
+  try {
+    lock2.waitLock(20000);
+  } catch (e) {
+    return { success: false, error: 'System is busy, please try again.' };
+  }
+
+  try {
+    lineRows.forEach(function (row) {
+      appendRowFromObject_(SHEET_REQUEST_LINES, row);
     });
 
     appendRowFromObject_(SHEET_REQUESTS, {
@@ -66,7 +105,7 @@ function submitLiquidationRequest(payload) {
   } catch (e) {
     return { success: false, error: 'Submission failed: ' + e.message };
   } finally {
-    lock.releaseLock();
+    lock2.releaseLock();
   }
 }
 
@@ -210,7 +249,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
 
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(10000);
+    lock.waitLock(20000);
   } catch (e) {
     return { success: false, error: 'System is busy, please try again.' };
   }
@@ -297,7 +336,7 @@ function updateLineItemAmount(requestId, lineId, newAmount, userId, password, re
 
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(10000);
+    lock.waitLock(20000);
   } catch (e) {
     return { success: false, error: 'System is busy, please try again.' };
   }

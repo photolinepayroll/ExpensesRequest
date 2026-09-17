@@ -773,8 +773,15 @@ function initExemptionsTab_() {
   });
 }
 
+// Uses the CSV-based employee search (common.js's searchEmployeesFromCsv_)
+// instead of the Apps Script action searchEmployeesForUtility — the latter
+// round-trips through Apps Script's GET/redirect/echo-content-URL dance and
+// re-reads the whole Employees sheet, uncached, on every keystroke, which was
+// the actual source of the visible lag while typing here. The CSV read is
+// fetched once per page session and cached (loadEmployeesCsv_), so every
+// subsequent keystroke is a local filter with no network round trip at all.
 function searchExemptionEmployees_(query) {
-  runServer('searchEmployeesForUtility', query)
+  searchEmployeesFromCsv_(query)
     .then(renderExemptionSearchResults_)
     .catch(function () { $('exemption-search-results').innerHTML = ''; });
 }
