@@ -787,12 +787,15 @@ var READ_ONLY_ACTIONS = ['getEmployeeByID', 'getMyRequests', 'getAllRequestsForP
 // bad moment on mobile surface as a raw, unactionable "TypeError: Failed to
 // fetch". This wraps every request with (a) a timeout via AbortController, so
 // a stalled mobile connection fails fast and retries instead of hanging
-// indefinitely, and (b) one silent retry (same 400ms backoff already used for
-// the echo-redirect case below) before giving up with a friendly message.
+// indefinitely, and (b) up to 2 silent retries (increasing backoff — raised
+// from 1 retry after users kept hitting "Connection problem" intermittently
+// during Apps Script's cold-start/echo-redirect dance, not just on weak
+// signal) before giving up with a friendly message.
 var FETCH_TIMEOUT_MS = 25000;
+var NETWORK_RETRY_DELAYS_MS = [400, 1200];
 
 function fetchWithRetry_(url, options, attemptsLeft) {
-  if (attemptsLeft === undefined) attemptsLeft = 2;
+  if (attemptsLeft === undefined) attemptsLeft = NETWORK_RETRY_DELAYS_MS.length + 1;
   options = options || {};
 
   var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -813,7 +816,8 @@ function fetchWithRetry_(url, options, attemptsLeft) {
     .catch(function (err) {
       if (timeoutId) clearTimeout(timeoutId);
       if (attemptsLeft > 1) {
-        return new Promise(function (resolve) { setTimeout(resolve, 400); })
+        var delay = NETWORK_RETRY_DELAYS_MS[NETWORK_RETRY_DELAYS_MS.length - (attemptsLeft - 1)];
+        return new Promise(function (resolve) { setTimeout(resolve, delay); })
           .then(function () { return fetchWithRetry_(url, options, attemptsLeft - 1); });
       }
       throw new Error('Connection problem — please check your signal and try again.');
@@ -845,7 +849,7 @@ function fetchTextWithRetry_(url, attemptsLeft) {
 var BUSY_RETRY_DELAYS_MS = [500, 1000, 2000, 4000];
 
 function fetchJsonWithRetry_(url, options, attemptsLeft, busyAttemptsLeft) {
-  if (attemptsLeft === undefined) attemptsLeft = 2;
+  if (attemptsLeft === undefined) attemptsLeft = NETWORK_RETRY_DELAYS_MS.length + 1;
   if (busyAttemptsLeft === undefined) busyAttemptsLeft = BUSY_RETRY_DELAYS_MS.length;
   return fetchWithRetry_(url, options, attemptsLeft)
     .then(function (res) { return res.text(); })
@@ -855,7 +859,8 @@ function fetchJsonWithRetry_(url, options, attemptsLeft, busyAttemptsLeft) {
         parsed = JSON.parse(text);
       } catch (parseErr) {
         if (attemptsLeft > 1) {
-          return new Promise(function (resolve) { setTimeout(resolve, 400); })
+          var delay = NETWORK_RETRY_DELAYS_MS[NETWORK_RETRY_DELAYS_MS.length - (attemptsLeft - 1)];
+          return new Promise(function (resolve) { setTimeout(resolve, delay); })
             .then(function () { return fetchJsonWithRetry_(url, options, attemptsLeft - 1, busyAttemptsLeft); });
         }
         throw new Error('Server returned an unexpected response — please try again.');

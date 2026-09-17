@@ -609,6 +609,30 @@ for the exact done/not-done breakdown, summarized here:**
       silent retries; the orphaned-Drive-file edge case actually occurring; and that
       the Submission Exemption search actually feels fast in a real browser.
 
+29. Same session, right after the concurrency fix went live, the user shared a screenshot of
+    an Approver ("Mjean.photo") hitting "Login failed: Connection problem — please check your
+    signal and try again." on `admin.html`, happening intermittently for multiple people (not
+    just one person's device). Investigated via plan mode with an Explore agent before
+    touching anything: confirmed this specific message can only come from `common.js`'s
+    `fetchWithRetry_` when the raw `fetch()` promise itself rejects or the 25s
+    `AbortController` timeout fires after retries run out — structurally unrelated to the
+    concurrency fix just shipped (`loginApprover` never returns `{success:false,...}`, so the
+    new busy-retry branch can't even match it, and its backend path has no `LockService` call
+    at all). Most likely cause given it hit multiple people: Apps Script's known
+    cold-start/echo-redirect dance occasionally outlasting the old 1-retry budget, or a brief
+    real network drop — not a code bug. User confirmed the fix direction (make retries more
+    forgiving, same shape as the busy-retry backoff just built). Raised `fetchWithRetry_`'s
+    default attempts from 2 to 3 (1 retry → 2 retries) with a new increasing backoff schedule
+    `NETWORK_RETRY_DELAYS_MS = [400, 1200]` replacing the old fixed 400ms delay;
+    `fetchJsonWithRetry_`'s default moved to match since both share one counter.
+    `FETCH_TIMEOUT_MS` (25s) left unchanged. 100% frontend (`common.js`), no backend deploy.
+    - **Verified**: `node --check` passes; a Node simulation of the retry indexing confirmed
+      exactly 3 total attempts with 400ms then 1200ms backoff.
+    - **Cannot verify without it recurring in the wild**: the root cause was inferred, not
+      directly observed (no way to reproduce a cold-start or network drop on demand), so
+      there's no way to confirm this actually resolves the intermittent login failures until
+      the affected users try again.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

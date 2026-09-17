@@ -187,6 +187,35 @@ no backend push/deploy needed — live as soon as the static files are served. I
       Drive-file edge case (Sheet write failing after a successful upload)
       actually occurring; and confirming the Submission Exemption search feels
       fast in an actual browser, not just in a Node simulation.
+    - **Same-session follow-up**: after this deployed, multiple Approvers
+      intermittently hit "Login failed: Connection problem — please check your
+      signal and try again." on `admin.html`. Confirmed via investigation this
+      is structurally unrelated to the lock/upload changes above — that message
+      can only come from `common.js`'s `fetchWithRetry_` when the raw `fetch()`
+      promise itself rejects or the 25s `AbortController` timeout fires, after
+      retries are exhausted; `loginApprover` never returns `{success:false,...}`
+      (it returns `{found:false, error:...}`) so the busy-retry branch can't
+      even match it, and `ApproverService.gs`'s `loginApprover` path has no
+      `LockService` call at all. Most likely cause: Apps Script's GET/POST→302→
+      echo-redirect content-URL dance (already documented as "confirmed
+      transient... after a fresh deploy or a cold start") occasionally
+      outlasting the old 1-retry/400ms budget, or a brief real network drop —
+      happening across multiple people, not one person's signal, so purely a
+      retry-budget tuning: raised `fetchWithRetry_`'s default attempt count from
+      2 to 3 (1 retry → 2 retries) and switched its fixed 400ms backoff to an
+      increasing schedule via a new `NETWORK_RETRY_DELAYS_MS = [400, 1200]`
+      (mirroring `BUSY_RETRY_DELAYS_MS`'s shape); `fetchJsonWithRetry_`'s own
+      default moved to match since both retry mechanisms share the same
+      `attemptsLeft` counter. `FETCH_TIMEOUT_MS` (25s per attempt) is
+      unchanged — this is about giving more chances to recover, not waiting
+      longer per attempt. 100% frontend (`common.js`), no backend change.
+      **Verified**: `node --check` passes; a Node simulation of the retry
+      indexing confirmed exactly 3 total attempts with 400ms then 1200ms
+      backoff before giving up. **Cannot verify without it recurring in the
+      wild** — the root cause (cold-start/redirect timing vs. real network) was
+      never directly observed, only inferred, so there's no way to confirm this
+      actually resolves the intermittent failures until it's tried again by the
+      affected users.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
