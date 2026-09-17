@@ -551,6 +551,64 @@ for the exact done/not-done breakdown, summarized here:**
       during a live Thu/Fri window. `CLAUDE.md`/`resume.md` updated and this session's
       changes committed/pushed to GitHub as the user's explicit next ask.
 
+28. New session, user reported the app "lagging" on submit/upload/data-loading under
+    multi-user load and suggested a first-come-first-served queue so concurrent access
+    wouldn't crash/lag Google Sheets. Planned via plan mode: an Explore agent first
+    confirmed the backend already serializes every mutation through one shared
+    `LockService.getScriptLock()` (so "one at a time" already existed), then three
+    clarifying questions settled the approach (lightweight tuning, not a full ticket
+    queue; exact processing order doesn't matter; retries should be silent, no visible
+    "queued" UI) before a Plan agent designed the fix, refined after reading the actual
+    files (`RequestService.gs`, `DriveService.gs`, `IdGenerator.gs`) — the plan's
+    original "temporary Drive folder token" idea for pre-lock uploads was replaced with
+    a cleaner two-phase-lock design once `generateRequestId_()`'s fast
+    `PropertiesService` counter (no external I/O) was confirmed, preserving the
+    existing `<EmployeeID>/<RequestID>/` Drive folder convention exactly. Built and
+    deployed same session:
+    - `submitLiquidationRequest` (`RequestService.gs`) split into 3 phases: a short
+      lock just to generate `requestId`/`lineId`s, unlocked Drive receipt upload(s)
+      using that real ID, then a second short lock for the actual `Requests`/
+      `RequestLines` Sheet writes — since all 5 mutation entry points in this app
+      (submit, advance-stage, edit-amount, grant/revoke exemption) share one
+      script-wide lock, this was blocking every queued action app-wide, not just other
+      submissions, on Drive's real external-API latency. Accepted tradeoff: a Sheet
+      write failing after a successful Phase-2 upload orphans that file in Drive — no
+      rollback built (no test suite, rare failure path, more Drive API surface isn't
+      worth it for this), documented explicitly in `CLAUDE.md` instead.
+    - `waitLock` raised `10000` → `20000` on `submitLiquidationRequest` (both phases),
+      `advanceRequestStage`, `updateLineItemAmount`; left at `10000` on the two rare
+      Authorizer-only exemption actions. `SheetService.gs`'s uncached full-sheet reads
+      and per-field writes were deliberately left alone this pass — shared by every
+      other backend file, riskier to touch without test coverage, and not the dominant
+      lag source once Drive I/O moved out of the lock.
+    - `frontend/common.js`'s `fetchJsonWithRetry_` gained a second, independent retry
+      budget that fires only on a well-formed `{success:false, error:'System is
+      busy...'}` response (`500/1000/2000/4000ms` backoff) — silent from the user's
+      perspective (existing spinner keeps showing), and layered after the existing
+      network/malformed-JSON retry without touching `runServer` or any call site.
+    - Pushed (`clasp push -f`) and deployed (`clasp deploy -i`, now `@36`); confirmed
+      live via `curl` against `getAllRequestsForPayroll` for both `Reviewed` and
+      `Authorized` filters.
+    - **Separate follow-up same session**: user shared a screenshot showing visible lag
+      typing into the Authorizer's Submission Exemption search box. Root cause: that
+      search called the Apps Script action `searchEmployeesForUtility` (full, uncached
+      `Employees` sheet read) on every debounced keystroke. Fixed by porting the same
+      search logic to a new `frontend/common.js` function,
+      `searchEmployeesFromCsv_()`, run against the already-cached published Employees
+      CSV (`loadEmployeesCsv_()`, the same cache the Biometric ID login uses) — 100%
+      frontend, no backend change, live as soon as `admin.js`/`common.js` are served.
+      Verified against the real live published CSV in Node (not just code
+      inspection): searching "celis" correctly matches employee 150 (Celis, Louwin).
+    - Work committed and pushed to GitHub as commit `9061ea9`
+      ("Reduce lock contention lag and speed up exemption employee search").
+    - **Not yet done**: no real-browser or real-concurrent-multi-user test of any of
+      this — cannot be simulated via curl/Node alone. Specifically unverified: whether
+      lag/"System is busy" failures actually drop under real concurrent load; whether
+      the 20s `waitLock` ever makes a single user wait uncomfortably long in silence;
+      whether the busy-retry could mask a genuinely stuck backend behind repeated
+      silent retries; the orphaned-Drive-file edge case actually occurring; and that
+      the Submission Exemption search actually feels fast in a real browser.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

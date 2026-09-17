@@ -64,8 +64,8 @@ sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) ar
 `AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg` (now `@35`)
 and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
 no backend push/deploy needed — live as soon as the static files are served. Item 11
-(concurrency/lag fix) touches both `.gs` files and `frontend/common.js` — see its own
-entry for exact push/deploy status.
+(concurrency/lag fix + exemption search speedup) is also fully deployed —
+`clasp deploy -i` was run against the same deployment, now `@36`.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -120,47 +120,73 @@ entry for exact push/deploy status.
       actually re-enables and a real submission succeeds during a live Thu/Fri window.
 
 11. **Concurrency/lag fix — shrink the shared `LockService` lock window, raise its
-    timeout, and add silent client-side retry on "System is busy."** Users reported
-    lag/timeouts on submit/upload/loading data under multi-user load. All 5 mutation
-    entry points (`submitLiquidationRequest`, `advanceRequestStage`,
-    `updateLineItemAmount`, `grantSubmissionExemption`, `revokeSubmissionExemption`)
-    already serialize through one shared, script-wide `LockService.getScriptLock()` —
-    so "one at a time" already existed; the actual problem was `submitLiquidationRequest`
-    running its Drive receipt upload(s) *inside* that lock, so a slow external Drive API
-    call blocked every other queued action app-wide (not just other submissions), plus a
-    fixed 10s `waitLock` that hard-rejected callers with "System is busy, please try
-    again." under real contention. See the Architecture section's Drive-upload paragraph
-    above for the resulting 3-phase `submitLiquidationRequest` structure (short lock for
-    ID generation → unlocked Drive upload → short lock for the Sheet writes). `waitLock`
-    was raised from `10000` to `20000` in `submitLiquidationRequest` (both phases),
-    `advanceRequestStage`, and `updateLineItemAmount` — the two exemption actions in
-    `ExemptionService.gs` were deliberately left at `10000` (rare, Authorizer-only, no
-    reason to make them wait longer). `SheetService.gs`'s uncached full-sheet reads and
-    per-field `updateRowFields_` writes were deliberately left untouched this pass — a
-    real further improvement, but shared by every other backend file
+    timeout, add silent client-side retry on "System is busy," and stop the
+    Submission Exemption tab's employee search from hitting Apps Script per
+    keystroke.** Users reported lag/timeouts on submit/upload/loading data under
+    multi-user load. All 5 mutation entry points (`submitLiquidationRequest`,
+    `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`,
+    `revokeSubmissionExemption`) already serialize through one shared, script-wide
+    `LockService.getScriptLock()` — so "one at a time" already existed; the actual
+    problem was `submitLiquidationRequest` running its Drive receipt upload(s)
+    *inside* that lock, so a slow external Drive API call blocked every other
+    queued action app-wide (not just other submissions), plus a fixed 10s
+    `waitLock` that hard-rejected callers with "System is busy, please try again."
+    under real contention. See the Architecture section's Drive-upload paragraph
+    above for the resulting 3-phase `submitLiquidationRequest` structure (short
+    lock for ID generation → unlocked Drive upload → short lock for the Sheet
+    writes). `waitLock` was raised from `10000` to `20000` in
+    `submitLiquidationRequest` (both phases), `advanceRequestStage`, and
+    `updateLineItemAmount` — the two exemption actions in `ExemptionService.gs`
+    were deliberately left at `10000` (rare, Authorizer-only, no reason to make
+    them wait longer). `SheetService.gs`'s uncached full-sheet reads and per-field
+    `updateRowFields_` writes were deliberately left untouched this pass — a real
+    further improvement, but shared by every other backend file
     (`EmployeeService.gs`/`ApproverService.gs`/`MealAllowanceService.gs`/
-    `StoreDirectoryService.gs`), so riskier to bundle here with no test coverage; scope
-    it as its own separate pass if lag persists after this fix. `frontend/common.js`'s
-    `fetchJsonWithRetry_` gained a second, independent retry budget
-    (`busyAttemptsLeft`, `BUSY_RETRY_DELAYS_MS = [500, 1000, 2000, 4000]`) that only
-    fires on a well-formed `{success:false, error:'System is busy...'}` response (regex
-    `/busy/i` against `error`) — any other `success:false` error (validation, "Request
-    not found", etc.) is never retried. This sits *after* the existing network-failure
-    and malformed-JSON retry layers in the same function, so all three retry reasons
-    compose without duplicating logic, and needed no changes at `runServer` or any
+    `StoreDirectoryService.gs`), so riskier to bundle here with no test coverage;
+    scope it as its own separate pass if lag persists after this fix.
+    `frontend/common.js`'s `fetchJsonWithRetry_` gained a second, independent
+    retry budget (`busyAttemptsLeft`, `BUSY_RETRY_DELAYS_MS = [500, 1000, 2000,
+    4000]`) that only fires on a well-formed `{success:false, error:'System is
+    busy...'}` response (regex `/busy/i` against `error`) — any other
+    `success:false` error (validation, "Request not found", etc.) is never
+    retried. This sits *after* the existing network-failure and malformed-JSON
+    retry layers in the same function, so all three retry reasons compose without
+    duplicating logic, and needed no changes at `runServer` or any
     `employee.js`/`admin.js` call site since they all already funnel through
-    `fetchJsonWithRetry_` uniformly. Ordering across concurrent requests is explicitly
-    NOT guaranteed by any of this (`LockService` has no FIFO fairness) — confirmed
-    with the user that this doesn't matter, only "stop timing out/lagging" does.
-    - **Verified**: `node --check frontend/common.js` passes. `clasp push -f` surfaces
-      any `.gs` syntax error at push time (no local Apps Script execution exists).
+    `fetchJsonWithRetry_` uniformly. Ordering across concurrent requests is
+    explicitly NOT guaranteed by any of this (`LockService` has no FIFO fairness)
+    — confirmed with the user that this doesn't matter, only "stop timing
+    out/lagging" does.
+    - **Separate, related fix same session**: the Authorizer's Submission
+      Exemption tab search box (`admin.js`'s `searchExemptionEmployees_`) was
+      calling `searchEmployeesForUtility` — an Apps Script action that re-reads
+      the whole `Employees` sheet uncached — on every debounced keystroke,
+      visibly laggy in a screenshot the user shared. Switched it to a new
+      `frontend/common.js` function, `searchEmployeesFromCsv_()`, a client-side
+      port of that same search logic (ID/Name substring match, Active-only, top
+      15 results) run against the already-cached `EMPLOYEES_CSV_URL` data
+      (`loadEmployeesCsv_()` — the same cache the Biometric ID login already
+      uses), so a search is now a local filter with zero backend round trips
+      after the first page-load fetch. `searchEmployeesForUtility` itself is
+      untouched and now unused again (same fate as the last time this pattern
+      was applied — see the CSV-based-read-paths section below).
+    - **Verified**: `node --check` passes on both touched frontend files;
+      `clasp push -f` + `clasp deploy -i` succeeded, live at deployment `@36`,
+      confirmed via `curl` against `getAllRequestsForPayroll` (both `Reviewed`
+      and `Authorized` filters returned valid JSON). The CSV-based exemption
+      search was verified against the real live published Employees CSV in
+      Node (not just code inspection) — searching "celis" correctly matches
+      employee 150 (Celis, Louwin), same result the old backend search would
+      have returned.
     - **Not yet done / cannot verify without a real browser and real concurrent
-      callers**: whether this actually reduces observed lag/"System is busy" failures
-      under real multi-user load; whether the 20s `waitLock` makes any single caller
-      wait uncomfortably long in silence; that the busy-retry doesn't mask a genuinely
-      persistent (non-transient) failure behind repeated silent retries; the orphaned-
-      Drive-file edge case (Sheet write failing after a successful upload) actually
-      occurring. `clasp deploy -i` still needs to be run to make the `.gs` changes live.
+      callers**: whether the lock/upload restructuring actually reduces
+      observed lag/"System is busy" failures under real multi-user load;
+      whether the 20s `waitLock` makes any single caller wait uncomfortably
+      long in silence; that the busy-retry doesn't mask a genuinely persistent
+      (non-transient) failure behind repeated silent retries; the orphaned-
+      Drive-file edge case (Sheet write failing after a successful upload)
+      actually occurring; and confirming the Submission Exemption search feels
+      fast in an actual browser, not just in a Node simulation.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
