@@ -113,10 +113,21 @@ function handleApproverLogin() {
   }
 
   var loginBtn = $('btn-login-approver');
+  var loginLabel = $('login-btn-label');
+  var loginArrow = $('login-btn-arrow');
   loginBtn.disabled = true;
+  loginLabel.innerHTML = '<span class="spinner" aria-hidden="true"></span> Logging in...';
+  hideEl(loginArrow);
+
+  function resetLoginButton() {
+    loginBtn.disabled = false;
+    loginLabel.textContent = 'Log in';
+    showEl(loginArrow);
+  }
+
   runServer('loginApprover', userId, password)
     .then(function (result) {
-      loginBtn.disabled = false;
+      resetLoginButton();
       if (!result.found) {
         setMessage(errorEl, result.error, true);
         return;
@@ -130,7 +141,7 @@ function handleApproverLogin() {
       setAdminTab('queue');
     })
     .catch(function (err) {
-      loginBtn.disabled = false;
+      resetLoginButton();
       setMessage(errorEl, 'Login failed: ' + err.message, true);
     });
 }
