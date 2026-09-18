@@ -236,8 +236,9 @@ Employee ID grouping/subtotal) is also 100% frontend — no backend push/deploy 
       (`Subtotal — <EmployeeName> — Crediting <date or "N/A">`, summing that
       group's `TotalAmount`) after every group with **2+ requests only** —
       a single-request group's subtotal would just repeat that one row's own
-      Total column, so it's deliberately skipped to avoid noise. The
-      pre-existing overall grand-total `<tfoot>` row is untouched.
+      Total column, so it's deliberately skipped to avoid noise. (The overall
+      grand-total row itself was later changed from `<tfoot>` to a plain
+      `<tbody>` row — see the follow-up below.)
     - The itemized receipt-page build (the 2-up Fare/Accommodation and 6-up
       Meal Allowance buckets, `fareItems`/`mealItems`/`missing`) now iterates
       the same `groups` structure rather than the flat `requests` array, so
@@ -261,6 +262,29 @@ Employee ID grouping/subtotal) is also 100% frontend — no backend push/deploy 
       visual shading/bold styling in an actual print/PDF render, and whether
       the reordered receipt-page sequence reads well end-to-end, still need a
       manual pass.
+    - **Same-session follow-up**: user reported the Grand Total row was
+      printing on *every* page of the summary table instead of once at the
+      end. Root cause: it was wrapped in `<tfoot>`, and Chrome/Firefox repeat
+      a table's `<tfoot>` at the bottom of every printed page a multi-page
+      table spans (mirroring how `<thead>` repeats at the top) — the
+      `subtotal-row`s were unaffected since those are plain `<tbody>` rows.
+      Fixed by moving the Grand Total into a plain `<tr class="grand-total-
+      row">` appended as the last row of `<tbody>` instead of a `<tfoot>` —
+      a `<tbody>` row only ever renders once, wherever it falls in the
+      table's content flow, so it now lands on the table's actual last page.
+      Also added a static two-column **signature block** (`signature-block`
+      div, blank underline + label + Date line for "Reviewer" and "Verified
+      by") right after `</table>` and before the itemized receipt pages, for
+      a physical pen signature on the printed copy — deliberately blank, not
+      pre-filled with the recorded `ReviewedBy`/`AuthorizedBy` names, since
+      those are already shown per-row in the table itself. Appears exactly
+      once per report, not per employee group or per page.
+      **Verified**: `node --check` passes; rendered `buildExportReportHtml_`
+      in Node against mock request data and confirmed no `<tfoot>` remains
+      anywhere in the output, the Grand Total row is the last child of
+      `<tbody>`, and the signature block appears exactly once. **Not yet
+      checked in a real browser** — the signature block's actual print
+      appearance and whether it ever splits awkwardly across a page break.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /

@@ -677,11 +677,16 @@ function buildExportReportHtml_(requests) {
   }).join('');
 
   var grandTotal = requests.reduce(function (sum, req) { return sum + (Number(req.TotalAmount) || 0); }, 0);
-  var grandTotalRow = '<tfoot><tr class="grand-total-row">' +
+  // Deliberately a plain <tbody> row, not a <tfoot> — Chrome/Firefox repeat
+  // a table's <tfoot> at the bottom of every printed page a multi-page table
+  // spans (mirroring how <thead> repeats at the top), which was printing the
+  // Grand Total on every page instead of once at the actual end of the table.
+  // A normal last <tbody> row only ever renders once, wherever it falls.
+  var grandTotalRow = '<tr class="grand-total-row">' +
     '<td colspan="3"><strong>Grand Total</strong></td>' +
     '<td><strong>' + escapeHtml_(formatCurrency(grandTotal)) + '</strong></td>' +
     '<td colspan="4"></td>' +
-    '</tr></tfoot>';
+    '</tr>';
 
   var missing = [];
   var fareItems = [];
@@ -755,6 +760,18 @@ function buildExportReportHtml_(requests) {
       '</ul></div>'
     : '';
 
+  // Static physical-signature block for the printed copy — blank underline
+  // + label + Date line for each of Reviewer and Verified by, since the
+  // table above already shows the recorded ReviewedBy/AuthorizedBy names;
+  // this is for an actual pen signature on the paper printout, not a
+  // restatement of who electronically reviewed it. Appears exactly once,
+  // right after the summary table, before the itemized receipt pages.
+  var signatureBlockHtml =
+    '<div class="signature-block">' +
+    '<div class="signature-line"><div class="sig-blank"></div><p>Reviewer</p><div class="sig-blank sig-date"></div><p>Date</p></div>' +
+    '<div class="signature-line"><div class="sig-blank"></div><p>Verified by</p><div class="sig-blank sig-date"></div><p>Date</p></div>' +
+    '</div>';
+
   return '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
     '<title>Liquidation Export — ' + escapeHtml_(now) + '</title>' +
     '<style>' +
@@ -794,6 +811,11 @@ function buildExportReportHtml_(requests) {
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.grand-total-row td { border-top: 2px solid #1e3a5f; }' +
     '.subtotal-row td { background: #eef2f7; font-weight: bold; border-top: 1px solid #94a3b8; }' +
+    '.signature-block { display: flex; gap: 40mm; margin-top: 14mm; page-break-inside: avoid; }' +
+    '.signature-line { flex: 1; }' +
+    '.signature-line .sig-blank { border-bottom: 1px solid #1e293b; height: 14mm; }' +
+    '.signature-line .sig-date { height: 8mm; margin-top: 10mm; }' +
+    '.signature-line p { margin: 4px 0 0; font-size: 11px; color: #1e293b; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +
     '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
     '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
@@ -811,7 +833,8 @@ function buildExportReportHtml_(requests) {
     '<table><thead><tr>' +
     '<th>Request ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
     '<th>Approved</th><th>Reviewed</th><th>Verified</th><th>Crediting Date</th>' +
-    '</tr></thead><tbody>' + summaryRows + '</tbody>' + grandTotalRow + '</table>' +
+    '</tr></thead><tbody>' + summaryRows + grandTotalRow + '</tbody></table>' +
+    signatureBlockHtml +
     receiptPagesHtml +
     missingHtml +
     '</body></html>';

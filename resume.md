@@ -655,8 +655,9 @@ for the exact done/not-done breakdown, summarized here:**
       flat `requests` array, inserting a `subtotal-row` ("Subtotal — <EmployeeName> —
       Crediting <date|N/A>", summing that group's `TotalAmount`) after every group with 2+
       requests — single-request groups skip the subtotal since it would just repeat that
-      one row's own Total column. The pre-existing overall grand-total `<tfoot>` is
-      untouched. A new `.subtotal-row` CSS rule (light gray background + bold, prints fine
+      one row's own Total column. (The overall grand-total row's own `<tfoot>` wrapper was
+      later removed — see the follow-up below.) A new `.subtotal-row` CSS rule (light gray
+      background + bold, prints fine
       in black-and-white) was added next to the existing `.grand-total-row` rule in the
       report's inline `<style>` block (the whole report is a single generated HTML string
       with inline CSS, not `styles.css` — confirmed by reading the file before editing).
@@ -674,6 +675,29 @@ for the exact done/not-done breakdown, summarized here:**
       end-to-end — flagged for the user to check personally. `CLAUDE.md`/`resume.md`
       updated and this session's change committed/pushed to GitHub as the user's explicit
       next ask; no `clasp push`/`clasp deploy` needed since nothing backend changed.
+    - **Same-session follow-up**: user then reported the Print Preview's Grand Total row
+      was printing on every page of the summary table instead of once at the end. Root
+      cause: it was wrapped in `<tfoot>`, and Chrome/Firefox repeat a table's `<tfoot>` at
+      the bottom of every printed page a multi-page table spans (mirroring how `<thead>`
+      repeats at the top) — the `subtotal-row`s added above were unaffected since those
+      are plain `<tbody>` rows. Fixed by moving the Grand Total into a plain
+      `<tr class="grand-total-row">` appended as the last row of `<tbody>` instead of a
+      `<tfoot>` — a `<tbody>` row only ever renders once, wherever it falls in the table's
+      content flow, so it now lands on the table's actual last page. Also added a static
+      two-column **signature block** (blank underline + label + Date line for "Reviewer"
+      and "Verified by") right after `</table>` and before the itemized receipt pages, for
+      a physical pen signature on the printed copy — planned via plan mode with two
+      clarifying questions (placement: right after the summary table, not at the very end
+      of the document; content: a blank line only, not pre-filled with the recorded
+      `ReviewedBy`/`AuthorizedBy` names, since those are already shown per-row in the
+      table). Appears exactly once per report, not per employee group or per page.
+      **Verified**: `node --check` passes; rendered `buildExportReportHtml_` in Node
+      against mock request data and confirmed no `<tfoot>` remains anywhere in the output,
+      the Grand Total row is the last child of `<tbody>`, and the signature block appears
+      exactly once. **Not yet checked in a real browser** — the signature block's actual
+      print appearance and whether it ever splits awkwardly across a page break. Committed
+      and pushed to GitHub as the user's explicit next ask; still 100% frontend, no
+      backend/deploy step needed.
 
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
