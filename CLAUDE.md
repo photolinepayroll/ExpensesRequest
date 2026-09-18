@@ -65,8 +65,10 @@ sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) ar
 and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
 no backend push/deploy needed — live as soon as the static files are served. Item 11
 (concurrency/lag fix + exemption search speedup) is also fully deployed —
-`clasp deploy -i` was run against the same deployment, now `@36`. Item 12 (Print Preview
-Employee ID grouping/subtotal) is also 100% frontend — no backend push/deploy needed.
+`clasp deploy -i` was run against the same deployment, now `@36`. Items 12-13 (Print
+Preview Employee ID grouping/subtotal, Grand Total/signature fix, export filter
+selection + post-cycle My Requests hiding) are also 100% frontend — no backend
+push/deploy needed.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -285,6 +287,65 @@ Employee ID grouping/subtotal) is also 100% frontend — no backend push/deploy 
       `<tbody>`, and the signature block appears exactly once. **Not yet
       checked in a real browser** — the signature block's actual print
       appearance and whether it ever splits awkwardly across a page break.
+
+13. **Export CSV/Print Preview now respect the on-screen filters (+ a new
+    Crediting Date range), and a Disbursed request drops off the employee's
+    own "My Requests" the day after its CreditingDate.** Two related asks:
+    exporting should let Payroll actually select what gets printed (e.g. by
+    Crediting Date, by employee name), and once a disbursement cycle is
+    finished, that request shouldn't linger indefinitely in the employee's
+    own view — but must stay visible forever to Reviewer/Verifier as the
+    audit trail. Both 100% frontend (`admin.html`, `admin.js`, `common.js`,
+    `employee.js`), no backend/schema change, no deploy needed.
+    - **Export now filter-aware**: previously `fetchExportableRequests_`
+      independently re-fetched every `Reviewed`/`Authorized` request,
+      ignoring whatever the visible "Reviewed & Disbursed" table's Status/
+      Employee Name/Date Requested filters were set to. The filter logic
+      inside `loadAdminHistory` was extracted into a new shared
+      `getFilteredHistoryRequests_(allRequests)`, and `fetchExportableRequests_`
+      now calls `loadJoinedRequests_().then(getFilteredHistoryRequests_)` —
+      so Export CSV and Print Preview always export exactly what's currently
+      on screen, not an independent unfiltered set.
+    - **New Crediting Date range filter**: two more `<input type="date">`
+      fields (`admin-history-crediting-date-from`/`-to`) added to the same
+      filter bar as the existing Date Requested range, wired the same way
+      (`change` → `loadAdminHistory`). Composes with AND alongside Status/
+      Name/Date Requested inside `getFilteredHistoryRequests_`. A
+      `Reviewed`-status row (no `CreditingDate` yet) is excluded whenever
+      this filter is actively narrowing by a crediting-date range — it has
+      nothing to compare against.
+    - **Employee's My Requests hides a Disbursed request the day after its
+      CreditingDate**: new `isPastCreditingDate_(creditingDateStr)` in
+      `common.js` (plain calendar "today > CreditingDate" check, comparing
+      local midnight-to-midnight, no business-day skipping — the
+      CreditingDate itself still shows). `employee.js`'s `loadMyRequests()`
+      filter gained `if (req.Status === 'Authorized' && req.CreditingDate &&
+      isPastCreditingDate_(req.CreditingDate)) return false;` alongside the
+      existing own-EmployeeID check.
+    - **No change needed for the Approver role or the Reviewer/Verifier
+      history tab** — confirmed by reading the code first: an Approver-role
+      login's queue (`loadAdminRequests`'s `queueStatuses`) never includes
+      `Reviewed`/`Authorized` in any filter state today, so it was already
+      impossible for an Approver to see a Disbursed request regardless of
+      date; and the "Reviewed & Disbursed" tab (Reviewer/Verifier only, per
+      `applyAdminTabVisibility_`) is explicitly the permanent, date-unfiltered
+      audit trail and was deliberately left untouched.
+    - **No "N hidden" indicator added** to My Requests — matches this app's
+      existing precedent (the Approver queue already silently omits
+      out-of-scope requests with no messaging).
+    - **Verified**: `node --check` passes on all four touched files; a
+      standalone Node test of the filter-composition logic and
+      `isPastCreditingDate_` against synthetic data confirmed: Crediting Date
+      range filtering composes correctly with Status/Name/Date Requested
+      (AND semantics, a Reviewed row with no CreditingDate is excluded when
+      the range filter is active); a request credited yesterday is hidden
+      from a simulated My Requests, one credited today still shows, and a
+      non-Authorized request is never excluded regardless of any stray date
+      field — all assertions passed. **Not yet checked in a real browser**:
+      that Export CSV/Print Preview reflect an applied Crediting Date filter
+      end-to-end, and a real Disbursed request actually disappearing from an
+      employee's My Requests the day after its CreditingDate (can't be
+      verified live without a real date rollover or adjusted test data).
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /

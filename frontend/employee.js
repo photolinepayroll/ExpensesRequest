@@ -680,7 +680,13 @@ function loadMyRequests() {
   loadJoinedRequests_()
     .then(function (requests) {
       var mine = requests.filter(function (req) {
-        return String(req.EmployeeID) === String(currentEmployee.EmployeeID);
+        if (String(req.EmployeeID) !== String(currentEmployee.EmployeeID)) return false;
+        // Once a Disbursed request's cycle is finished (the day after its
+        // CreditingDate), it drops off the employee's own view — it remains
+        // visible forever to Reviewer/Verifier on the "Reviewed & Disbursed"
+        // audit tab regardless of this filter.
+        if (req.Status === 'Authorized' && req.CreditingDate && isPastCreditingDate_(req.CreditingDate)) return false;
+        return true;
       });
       renderRequestsTable(container, mine, { showEmployee: false });
     })

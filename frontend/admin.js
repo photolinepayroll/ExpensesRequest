@@ -72,6 +72,8 @@ function initAdminView() {
   $('admin-history-name-filter').addEventListener('input', loadAdminHistory);
   $('admin-history-date-from').addEventListener('change', loadAdminHistory);
   $('admin-history-date-to').addEventListener('change', loadAdminHistory);
+  $('admin-history-crediting-date-from').addEventListener('change', loadAdminHistory);
+  $('admin-history-crediting-date-to').addEventListener('change', loadAdminHistory);
   $('tab-admin-queue').addEventListener('click', function () { setAdminTab('queue'); });
   $('tab-admin-history').addEventListener('click', function () { setAdminTab('history'); });
   $('tab-admin-exemptions').addEventListener('click', function () { setAdminTab('exemptions'); });
@@ -255,40 +257,63 @@ function loadAdminRequests() {
 // history). Both statuses are already unscoped server-side (no category/
 // store routing check applies past the Approved stage), so no routing
 // re-check is needed here the way loadAdminRequests needs one for Pending.
-function loadAdminHistory() {
-  var container = $('admin-history-table-container');
-  container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
+// Shared by the on-screen "Reviewed & Disbursed" table (loadAdminHistory)
+// and both export functions (fetchExportableRequests_), so Export CSV/Print
+// Preview always export exactly what the currently-applied filters show,
+// rather than an independent, filter-blind Reviewed+Authorized fetch.
+function getFilteredHistoryRequests_(allRequests) {
   var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'All'
   var historyStatuses = ['Reviewed', 'Authorized'];
 
   // Permanent audit trail — this list is never time-windowed or capped
   // (loadJoinedRequests_ already returns the complete unfiltered dataset);
-  // these three are purely additive search filters over that full history.
+  // these are purely additive search filters over that full history.
   var nameFilter = $('admin-history-name-filter').value.trim().toLowerCase();
   var dateFromRaw = $('admin-history-date-from').value; // 'YYYY-MM-DD' or ''
   var dateToRaw = $('admin-history-date-to').value;
   var dateFrom = dateFromRaw ? new Date(dateFromRaw + 'T00:00:00') : null;
   var dateTo = dateToRaw ? new Date(dateToRaw + 'T23:59:59') : null;
+  var cdFromRaw = $('admin-history-crediting-date-from').value;
+  var cdToRaw = $('admin-history-crediting-date-to').value;
+  var cdFrom = cdFromRaw ? new Date(cdFromRaw + 'T00:00:00') : null;
+  var cdTo = cdToRaw ? new Date(cdToRaw + 'T23:59:59') : null;
+
+  return allRequests.filter(function (req) {
+    if (statusFilter === 'All') {
+      if (historyStatuses.indexOf(req.Status) === -1) return false;
+    } else if (req.Status !== statusFilter) {
+      return false;
+    }
+
+    if (nameFilter && (req.EmployeeName || '').toLowerCase().indexOf(nameFilter) === -1) return false;
+
+    if (dateFrom || dateTo) {
+      var submitted = new Date(req.DateSubmitted);
+      if (dateFrom && submitted < dateFrom) return false;
+      if (dateTo && submitted > dateTo) return false;
+    }
+
+    if (cdFrom || cdTo) {
+      // Reviewed-only rows have no CreditingDate yet — excluded whenever
+      // this filter is actively narrowing by a crediting date range.
+      if (!req.CreditingDate) return false;
+      var crediting = new Date(req.CreditingDate);
+      if (cdFrom && crediting < cdFrom) return false;
+      if (cdTo && crediting > cdTo) return false;
+    }
+
+    return true;
+  });
+}
+
+function loadAdminHistory() {
+  var container = $('admin-history-table-container');
+  container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
+  var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'All'
 
   loadJoinedRequests_()
     .then(function (allRequests) {
-      var requests = allRequests.filter(function (req) {
-        if (statusFilter === 'All') {
-          if (historyStatuses.indexOf(req.Status) === -1) return false;
-        } else if (req.Status !== statusFilter) {
-          return false;
-        }
-
-        if (nameFilter && (req.EmployeeName || '').toLowerCase().indexOf(nameFilter) === -1) return false;
-
-        if (dateFrom || dateTo) {
-          var submitted = new Date(req.DateSubmitted);
-          if (dateFrom && submitted < dateFrom) return false;
-          if (dateTo && submitted > dateTo) return false;
-        }
-
-        return true;
-      });
+      var requests = getFilteredHistoryRequests_(allRequests);
 
       var bulkAction = NEXT_ACTION_BY_STATUS[statusFilter];
       var bulkEligible = !!bulkAction && currentApprover.role === REQUIRED_ROLE_BY_STATUS[statusFilter];
@@ -1021,11 +1046,11 @@ function initExportButtons_() {
 // Pending-routing-scoped anyway (same as the server), so no client-side
 // scoping logic is needed here, just a plain status filter.
 function fetchExportableRequests_() {
-  return loadJoinedRequests_().then(function (all) {
-    return all.filter(function (req) {
-      return req.Status === 'Reviewed' || req.Status === 'Authorized';
-    });
-  });
+  // Reuses the exact same criteria as the on-screen "Reviewed & Disbursed"
+  // table (Status + Employee Name + Date Requested + Crediting Date range),
+  // so Export CSV / Print Preview only ever export what's currently
+  // selected/filtered on screen — not an independent, filter-blind fetch.
+  return loadJoinedRequests_().then(getFilteredHistoryRequests_);
 }
 
 function handleExportCsvClick_() {

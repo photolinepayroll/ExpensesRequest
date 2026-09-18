@@ -42,6 +42,19 @@ function formatDateDisplay(value) {
   return d.toLocaleDateString();
 }
 
+// True once today's calendar date is strictly after the given CreditingDate
+// (the CreditingDate itself still counts as "not yet past") — used to hide
+// a Disbursed request from the employee's own My Requests view the day
+// after its disbursement, once the cycle is finished. Compares calendar
+// dates only, in local time, ignoring time-of-day on either side.
+function isPastCreditingDate_(creditingDateStr) {
+  var crediting = new Date(creditingDateStr);
+  var creditingMidnight = new Date(crediting.getFullYear(), crediting.getMonth(), crediting.getDate());
+  var todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+  return todayMidnight > creditingMidnight;
+}
+
 // Used by the Verifier's Submission Exemption panel and the employee-side
 // exemption banner to show a plain clock time ("2:45 PM"), not a full date —
 // an exemption only ever lasts 1 hour so the date itself is never in question.

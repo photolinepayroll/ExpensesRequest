@@ -699,6 +699,51 @@ for the exact done/not-done breakdown, summarized here:**
       and pushed to GitHub as the user's explicit next ask; still 100% frontend, no
       backend/deploy step needed.
 
+31. Same session, user asked for two more related changes: (1) Export CSV/Print Preview
+    should let Payroll actually select what gets printed — e.g. by Crediting Date, by
+    name — instead of always exporting every Reviewed/Disbursed request; and (2) once a
+    disbursement cycle finishes (the day after a request's Crediting Date), that request
+    should disappear from the employee's own "My Requests" view, but stay visible forever
+    to Reviewer/Verifier for audit reference. Planned via plan mode: an Explore agent
+    first confirmed exact current behavior — `fetchExportableRequests_` independently
+    re-fetched every Reviewed/Authorized request regardless of the history table's own
+    Status/Employee Name/Date Requested filters; an Approver-role login's queue
+    (`loadAdminRequests`'s `queueStatuses`) already never includes Reviewed/Authorized in
+    any filter state, so it was already impossible for an Approver to see a Disbursed
+    request at all, date or no date; and the Reviewed & Disbursed tab is Reviewer/Verifier-
+    only and explicitly the permanent, unfiltered audit trail — then three clarifying
+    questions confirmed: reuse/extend the existing history filter bar for exports (add a
+    Crediting Date range) rather than a separate export panel; the hide rule is a plain
+    calendar "today > CreditingDate" cutoff, no business-day skipping; and the hide rule
+    only touches My Requests (no Approver-side change needed, since it was already moot
+    there). 100% frontend (`admin.html`, `admin.js`, `common.js`, `employee.js`).
+    - Extracted `loadAdminHistory`'s inline filter logic into a shared
+      `getFilteredHistoryRequests_(allRequests)` (Status/Name/Date Requested, now also
+      Crediting Date range), used by both the on-screen render and
+      `fetchExportableRequests_` — so Export CSV/Print Preview now export exactly what's
+      currently on screen instead of an independent unfiltered fetch.
+    - Added two new date inputs (`admin-history-crediting-date-from`/`-to`) to the same
+      filter bar as the existing Date Requested range, wired the same way. Composes with
+      AND alongside the existing filters; a `Reviewed`-status row (no `CreditingDate` yet)
+      is excluded whenever the crediting-date range is actively narrowing, since it has
+      nothing to compare against.
+    - New `isPastCreditingDate_(creditingDateStr)` in `common.js` (calendar-only "today >
+      CreditingDate" comparison, local midnight-to-midnight, CreditingDate itself still
+      shows). `employee.js`'s `loadMyRequests()` filter gained a check to drop an
+      `Authorized` request once its CreditingDate is past — silent, no "N hidden" note,
+      matching the existing precedent set by the Approver queue's own silent scoping.
+    - **Verified**: `node --check` passes on all four touched files; a standalone Node
+      test of the filter-composition logic and `isPastCreditingDate_` against synthetic
+      data confirmed correct AND-composition across all four export filters, and that a
+      My-Requests simulation hides a request credited yesterday, keeps one credited today,
+      and never hides a non-Authorized request — all assertions passed.
+    - **Not yet done**: no real-browser check that Export CSV/Print Preview actually
+      reflect an applied Crediting Date filter end-to-end, or that a real Disbursed
+      request disappears from an employee's My Requests the day after its CreditingDate
+      (can't be verified live without a real date rollover or adjusted test data).
+      `CLAUDE.md`/`resume.md` updated and this session's change committed/pushed to
+      GitHub as the user's explicit next ask; no backend/deploy step needed.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.
