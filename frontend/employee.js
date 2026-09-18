@@ -682,10 +682,12 @@ function loadMyRequests() {
       var mine = requests.filter(function (req) {
         if (String(req.EmployeeID) !== String(currentEmployee.EmployeeID)) return false;
         // Once a Disbursed request's cycle is finished (the day after its
-        // CreditingDate), it drops off the employee's own view — it remains
-        // visible forever to Reviewer/Verifier on the "Reviewed & Disbursed"
-        // audit tab regardless of this filter.
-        if (req.Status === 'Authorized' && req.CreditingDate && isPastCreditingDate_(req.CreditingDate)) return false;
+        // CreditingDate) or a Rejected request's cutoff has passed (the day
+        // after its RejectedDate), it drops off the employee's own view — it
+        // remains visible forever to Reviewer/Verifier on the "Reviewed &
+        // Disbursed" audit tab regardless of this filter.
+        if (req.Status === 'Authorized' && req.CreditingDate && isPastCutoffDate_(req.CreditingDate)) return false;
+        if (req.Status === 'Rejected' && req.RejectedDate && isPastCutoffDate_(req.RejectedDate)) return false;
         return true;
       });
       renderRequestsTable(container, mine, { showEmployee: false });

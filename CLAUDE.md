@@ -65,10 +65,11 @@ sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) ar
 and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
 no backend push/deploy needed — live as soon as the static files are served. Item 11
 (concurrency/lag fix + exemption search speedup) is also fully deployed —
-`clasp deploy -i` was run against the same deployment, now `@36`. Items 12-14 (Print
+`clasp deploy -i` was run against the same deployment, now `@36`. Items 12-15 (Print
 Preview Employee ID grouping/subtotal, Grand Total/signature fix, export filter
 selection + post-cycle My Requests hiding, explicit row-selection for export + filter
-bar restyle) are also 100% frontend — no backend push/deploy needed.
+bar restyle, post-cycle hiding extended to Rejected) are also 100% frontend — no
+backend push/deploy needed.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -396,6 +397,45 @@ bar restyle) are also 100% frontend — no backend push/deploy needed.
       the new filter-panel/hint visual appearance, checking specific rows and
       confirming Export CSV/Print Preview include exactly those, and "Clear
       filters" resetting the view correctly.
+
+15. **Post-cycle hiding (item 13) extended to Rejected requests, not just Disbursed.**
+    User confirmed the existing Disbursed-hiding rule was correct as designed, then
+    asked for the same rule on Rejected: hidden from the requestor's My Requests and
+    every Approver's "Liquidation Requests" queue the day after the cycle ends, but
+    permanently visible to Reviewer/Verifier for audit reference. 100% frontend
+    (`common.js`, `employee.js`, `admin.js`, `admin.html`), no backend/deploy needed.
+    - `common.js`'s `isPastCreditingDate_` renamed to `isPastCutoffDate_` (still the
+      same strictly-after-today's-calendar-date, local-time logic) since it's now
+      used for two different cutoff dates — `CreditingDate` for Disbursed,
+      `RejectedDate` for Rejected.
+    - `employee.js`'s My Requests filter and `admin.js`'s "Liquidation Requests"
+      queue filter (`loadAdminRequests`, shared by every role) both gained a second
+      cutoff check: a Rejected request whose `RejectedDate` is in the past also
+      drops off, identically to how Disbursed already worked.
+    - `admin.js`'s "Reviewed & Disbursed" tab — already gated to Reviewer/Verifier
+      only via `applyAdminTabVisibility_` — gained `Rejected` as a third permanent
+      status alongside Reviewed/Authorized (new "Rejected" option in
+      `admin-history-filter`, `historyStatuses` in `getFilteredHistoryRequests_`
+      extended). This becomes the request's permanent home once it ages out of the
+      live queue.
+    - **Bug found and fixed, newly exposed by this change**: `buildExportReportHtml_`'s
+      per-receipt caption unconditionally read `'Approved by ' + req.ApprovedBy`,
+      assuming every exportable request had been approved — true for
+      Reviewed/Authorized, but not for a request Rejected at the Pending stage
+      before any Approver acted on it (would have printed "Approved by undefined").
+      Made every caption segment (Approved/Reviewed/Verified/Rejected by)
+      conditional on that field actually being present.
+    - `EXPORT_CSV_HEADERS`/`buildExportCsv_` deliberately left unchanged — no new
+      `RejectedBy`/`RejectedDate` CSV columns, since the backend already appends a
+      "Rejected by X: remark" line to `Remarks`, which the CSV already exports.
+    - **Verified**: `node --check` passes on all three touched JS files; confirmed no
+      dangling references to the renamed `isPastCreditingDate_` remain anywhere in
+      `frontend/`; a standalone Node simulation of the cutoff boundary confirmed
+      today/future dates are never "past" and a date one day in the past always is.
+      **Not yet checked in a real browser**: a real Rejected request actually
+      disappearing from the queue/My Requests the day after rejection, and the new
+      "Rejected" option's behavior in the Reviewed & Disbursed tab and its CSV/Print
+      Preview export.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /

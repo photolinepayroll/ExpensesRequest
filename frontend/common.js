@@ -42,17 +42,20 @@ function formatDateDisplay(value) {
   return d.toLocaleDateString();
 }
 
-// True once today's calendar date is strictly after the given CreditingDate
-// (the CreditingDate itself still counts as "not yet past") — used to hide
-// a Disbursed request from the employee's own My Requests view the day
-// after its disbursement, once the cycle is finished. Compares calendar
-// dates only, in local time, ignoring time-of-day on either side.
-function isPastCreditingDate_(creditingDateStr) {
-  var crediting = new Date(creditingDateStr);
-  var creditingMidnight = new Date(crediting.getFullYear(), crediting.getMonth(), crediting.getDate());
+// True once today's calendar date is strictly after the given cutoff date
+// (the cutoff date itself still counts as "not yet past") — used to hide a
+// Disbursed request (cutoff = CreditingDate) or a Rejected request (cutoff =
+// RejectedDate) from the employee's own My Requests view and every
+// Approver's queue the day after that cycle is finished. Compares calendar
+// dates only, in local time, ignoring time-of-day on either side. The
+// Reviewer/Verifier's "Reviewed & Disbursed" audit tab is never filtered by
+// this — that view is the permanent record regardless of cutoff.
+function isPastCutoffDate_(cutoffDateStr) {
+  var cutoff = new Date(cutoffDateStr);
+  var cutoffMidnight = new Date(cutoff.getFullYear(), cutoff.getMonth(), cutoff.getDate());
   var todayMidnight = new Date();
   todayMidnight.setHours(0, 0, 0, 0);
-  return todayMidnight > creditingMidnight;
+  return todayMidnight > cutoffMidnight;
 }
 
 // Used by the Verifier's Submission Exemption panel and the employee-side

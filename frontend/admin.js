@@ -175,7 +175,10 @@ function adminOnDetailRendered_(panel, request) {
 
 // "Liquidation Requests" tab — the live queue: Pending (Approver),
 // Approved (Reviewer), Rejected, or All of those three. Reviewed/Disbursed
-// live on the separate "Reviewed & Disbursed" tab (loadAdminHistory) instead.
+// live on the separate "Reviewed & Disbursed" tab (loadAdminHistory)
+// instead. A Rejected request also drops off this queue the day after its
+// RejectedDate (see the isPastCutoffDate_ check below) — it moves to that
+// same "Reviewed & Disbursed" tab as its permanent audit-only home.
 function loadAdminRequests() {
   var container = $('admin-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
@@ -212,6 +215,12 @@ function loadAdminRequests() {
         } else if (req.Status !== statusFilter) {
           return false;
         }
+
+        // Once a Rejected request's cutoff has passed (the day after its
+        // RejectedDate), it drops off this queue for every role — it
+        // remains visible forever to Reviewer/Verifier on the "Reviewed &
+        // Disbursed" audit tab regardless of this filter.
+        if (req.Status === 'Rejected' && req.RejectedDate && isPastCutoffDate_(req.RejectedDate)) return false;
 
         if (scopeToApprover) {
           var emp = employeeRows.filter(function (e) { return String(e.EmployeeID) === String(req.EmployeeID); })[0];
@@ -267,8 +276,11 @@ function loadAdminRequests() {
 // Preview always export exactly what the currently-applied filters show,
 // rather than an independent, filter-blind Reviewed+Authorized fetch.
 function getFilteredHistoryRequests_(allRequests) {
-  var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'All'
-  var historyStatuses = ['Reviewed', 'Authorized'];
+  var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'Rejected' | 'All'
+  // Rejected is included here (not just Reviewed/Authorized) so a Rejected
+  // request past its own queue cutoff (see loadAdminRequests) still has a
+  // permanent home for Reviewer/Verifier audit reference.
+  var historyStatuses = ['Reviewed', 'Authorized', 'Rejected'];
 
   // Permanent audit trail — this list is never time-windowed or capped
   // (loadJoinedRequests_ already returns the complete unfiltered dataset);
@@ -749,12 +761,16 @@ function buildExportReportHtml_(requests) {
         // Repeats the summary table's ApprovedBy/ReviewedBy/AuthorizedBy on
         // every receipt page too, so whoever is flipping through printed
         // receipts doesn't have to page back to the summary table to see who
-        // signed off — ApprovedBy is always present (a prerequisite of both
-        // exportable statuses), ReviewedBy likewise, AuthorizedBy only once
-        // actually Disbursed.
-        var approverParts = ['Approved by ' + req.ApprovedBy];
+        // signed off. ApprovedBy/ReviewedBy are guaranteed present for the
+        // Reviewed/Authorized statuses, AuthorizedBy only once actually
+        // Disbursed — but a Rejected request may have been rejected at any
+        // stage (e.g. Pending, before ever being approved), so every part
+        // here is conditional rather than assuming ApprovedBy always exists.
+        var approverParts = [];
+        if (req.ApprovedBy) approverParts.push('Approved by ' + req.ApprovedBy);
         if (req.ReviewedBy) approverParts.push('Reviewed by ' + req.ReviewedBy);
         if (req.AuthorizedBy) approverParts.push('Verified by ' + req.AuthorizedBy);
+        if (req.Status === 'Rejected' && req.RejectedBy) approverParts.push('Rejected by ' + req.RejectedBy);
         var item = {
           caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
             formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,

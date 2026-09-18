@@ -783,6 +783,53 @@ for the exact done/not-done breakdown, summarized here:**
       updated and committed/pushed to GitHub as the user's explicit next ask; no
       backend/deploy step needed.
 
+33. New session, resumed via `resume.md`/`CLAUDE.md`, then the user asked for a
+    correction to the post-cycle hiding behavior from item 30: confirmed the existing
+    Disbursed-hiding rule (hidden from the requestor's My Requests and every
+    Approver the day after cycle end, but permanently visible to Reviewer/Verifier
+    for audit reference) was already correct as-is, and asked to extend the same
+    rule to **Rejected** requests too. 100% frontend (`common.js`, `employee.js`,
+    `admin.js`, `admin.html`), no backend/deploy needed.
+    - Renamed `common.js`'s `isPastCreditingDate_` → `isPastCutoffDate_` (one call
+      site, low risk) since it's now used for two different cutoff dates —
+      `CreditingDate` for Disbursed, `RejectedDate` for Rejected — not just crediting
+      date. Logic itself (strictly-after-today's-calendar-date, local time) is
+      unchanged.
+    - `employee.js`'s My Requests filter gained a second cutoff check: a Rejected
+      request with a `RejectedDate` in the past also drops off, same as Disbursed.
+    - `admin.js`'s "Liquidation Requests" queue tab (shared by every role) gained the
+      same cutoff check for Rejected — it disappears from the live queue for
+      Approver/Reviewer/Verifier alike the day after rejection.
+    - `admin.js`'s "Reviewed & Disbursed" tab (visible only to Reviewer/Verifier, via
+      the pre-existing `applyAdminTabVisibility_` role gate) gained `Rejected` as a
+      third permanent status alongside Reviewed/Authorized — new "Rejected" option
+      added to `admin-history-filter` in `admin.html`, `historyStatuses` in
+      `getFilteredHistoryRequests_` extended to include it. This is the request's new
+      permanent home once it ages out of the live queue, mirroring how Disbursed
+      already worked.
+    - **Bug found and fixed along the way, exposed by this change rather than
+      pre-existing on its own**: `buildExportReportHtml_`'s per-receipt caption
+      unconditionally read `'Approved by ' + req.ApprovedBy`, assuming every
+      exportable request had been approved — true for Reviewed/Authorized, but not
+      for a request Rejected at the Pending stage before any Approver ever acted on
+      it (would have printed "Approved by undefined"). Made every segment
+      (Approved/Reviewed/Verified/Rejected by) conditional on that field actually
+      being present.
+    - Deliberately left `EXPORT_CSV_HEADERS`/`buildExportCsv_` unchanged — no new
+      `RejectedBy`/`RejectedDate` columns added, since the backend already appends a
+      "Rejected by X: remark" line to `Remarks`, which the CSV already exports;
+      adding dedicated columns wasn't asked for and would be scope creep beyond the
+      visibility fix.
+    - **Verified**: `node --check` passes on all three touched JS files; confirmed no
+      dangling references to the renamed `isPastCreditingDate_` remain anywhere in
+      `frontend/`; a standalone Node simulation of the cutoff boundary (today/
+      yesterday/tomorrow) confirmed today and future dates are never "past" and a
+      date one day in the past always is. **Not yet checked in a real browser**: a
+      real Rejected request actually disappearing from the queue/My Requests the day
+      after rejection (can't be verified live without a real date rollover or
+      adjusted test data), and the new "Rejected" option's appearance/behavior in the
+      Reviewed & Disbursed tab and its CSV/Print Preview export.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.
