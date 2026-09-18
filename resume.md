@@ -633,6 +633,48 @@ for the exact done/not-done breakdown, summarized here:**
       there's no way to confirm this actually resolves the intermittent login failures until
       the affected users try again.
 
+30. New session, resumed via `resume.md`/`CLAUDE.md`, then the user asked to update the
+    "Print Preview" export report: arrange the summary table by Employee ID, and show a
+    summary total of expenses per employee grouped by their Crediting Date (disbursement
+    Friday) — itemized request/description pages and the Approved/Reviewed/Verified columns
+    stay as-is. Planned via plan mode (an Explore agent first mapped the exact current
+    structure of `buildExportReportHtml_`/`fetchExportableRequests_`/`loadJoinedRequests_`,
+    confirmed field names and that the Authorizer→Verifier rename only touched display text
+    — `AuthorizedBy`/`AuthorizedDate`/`STATUS_AUTHORIZED='Authorized'` are all still the real
+    internal names; a Plan agent then designed the grouping approach), plus three clarifying
+    questions confirmed: group by Employee ID then subtotal per Crediting Date within each
+    employee (not one flat per-employee subtotal); CSV export stays untouched (Print Preview
+    only); and the itemized receipt pages should also reorder to match the new Employee
+    ID/Crediting Date grouping so the whole report reads as coherent per-employee packets.
+    100% frontend (`frontend/admin.js` only) — no backend, schema, or CSV export change.
+    - New pure helper `groupRequestsForReport_(requests)`: sorts by `EmployeeID` (numeric-
+      aware string compare) then `CreditingDate` (blank/null sorts last within an employee —
+      a legacy/not-yet-disbursed row reads as "not yet scheduled," not "earliest"), then
+      buckets into `{employeeId, employeeName, creditingDate, requests: [...]}` groups.
+    - `buildExportReportHtml_`'s summary-table build now walks these groups instead of the
+      flat `requests` array, inserting a `subtotal-row` ("Subtotal — <EmployeeName> —
+      Crediting <date|N/A>", summing that group's `TotalAmount`) after every group with 2+
+      requests — single-request groups skip the subtotal since it would just repeat that
+      one row's own Total column. The pre-existing overall grand-total `<tfoot>` is
+      untouched. A new `.subtotal-row` CSS rule (light gray background + bold, prints fine
+      in black-and-white) was added next to the existing `.grand-total-row` rule in the
+      report's inline `<style>` block (the whole report is a single generated HTML string
+      with inline CSS, not `styles.css` — confirmed by reading the file before editing).
+    - The itemized receipt-page build (2-up Fare/Accommodation, 6-up Meal Allowance
+      buckets) now iterates the same `groups` structure rather than the flat array, so
+      receipt pages follow the same Employee ID → Crediting Date order as the summary
+      table — the bucketing/chunking/caption logic itself is byte-for-byte unchanged.
+    - **Verified**: `node --check frontend/admin.js` passes; a standalone Node test of
+      `groupRequestsForReport_` against synthetic multi-employee/multi-date data confirmed
+      numeric-aware Employee ID ordering, blank-`CreditingDate`-sorts-last, and correct
+      subtotal-eligibility (2+ request groups get a subtotal row, single-request groups
+      don't) — all assertions passed.
+    - **Not yet done**: no real-browser check of the subtotal row's visual styling in an
+      actual print/PDF render, or whether the reordered receipt-page sequence reads well
+      end-to-end — flagged for the user to check personally. `CLAUDE.md`/`resume.md`
+      updated and this session's change committed/pushed to GitHub as the user's explicit
+      next ask; no `clasp push`/`clasp deploy` needed since nothing backend changed.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

@@ -65,7 +65,8 @@ sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) ar
 and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
 no backend push/deploy needed — live as soon as the static files are served. Item 11
 (concurrency/lag fix + exemption search speedup) is also fully deployed —
-`clasp deploy -i` was run against the same deployment, now `@36`.
+`clasp deploy -i` was run against the same deployment, now `@36`. Item 12 (Print Preview
+Employee ID grouping/subtotal) is also 100% frontend — no backend push/deploy needed.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -216,6 +217,50 @@ no backend push/deploy needed — live as soon as the static files are served. I
       never directly observed, only inferred, so there's no way to confirm this
       actually resolves the intermittent failures until it's tried again by the
       affected users.
+
+12. **Print Preview summary table grouped by Employee ID with a per-employee,
+    per-Crediting-Date subtotal.** User asked for the "Print Preview" export
+    report to arrange its summary table by Employee ID and show a total of
+    expenses per employee grouped by their disbursement (Crediting) date,
+    while leaving the itemized receipt pages' content and the Approved/
+    Reviewed/Verified columns/captions unchanged. 100% frontend
+    (`frontend/admin.js`), no backend/CSV-export change, no deploy needed.
+    - New pure helper `groupRequestsForReport_(requests)` in `admin.js`:
+      sorts requests by `EmployeeID` (primary, numeric-aware string compare)
+      then `CreditingDate` (secondary; a blank/null `CreditingDate` — a
+      legacy or not-yet-disbursed row — sorts *last* within that employee,
+      not first), then buckets them into groups keyed by
+      `EmployeeID + CreditingDate`.
+    - `buildExportReportHtml_`'s summary-table build now walks these groups
+      instead of the flat `requests` array, appending a `subtotal-row`
+      (`Subtotal — <EmployeeName> — Crediting <date or "N/A">`, summing that
+      group's `TotalAmount`) after every group with **2+ requests only** —
+      a single-request group's subtotal would just repeat that one row's own
+      Total column, so it's deliberately skipped to avoid noise. The
+      pre-existing overall grand-total `<tfoot>` row is untouched.
+    - The itemized receipt-page build (the 2-up Fare/Accommodation and 6-up
+      Meal Allowance buckets, `fareItems`/`mealItems`/`missing`) now iterates
+      the same `groups` structure rather than the flat `requests` array, so
+      the printed receipt packet follows the same Employee ID → Crediting
+      Date order as the summary table above it — the bucketing/chunking/
+      caption logic itself is byte-for-byte unchanged.
+    - New `.subtotal-row` CSS rule added to the report's inline `<style>`
+      block (light gray background + bold text, prints fine in black-and-
+      white), next to the existing `.grand-total-row` rule.
+    - Explicitly out of scope, confirmed with the user beforehand: CSV export
+      (`buildExportCsv_`/`EXPORT_CSV_HEADERS`) keeps its current per-line-item
+      order untouched; the Approved/Reviewed/Verified column contents and the
+      "Approved by X · Reviewed by Y · Verified by Z" caption wording are
+      unchanged; no backend, sheet, or `setupSheets()` change.
+    - **Verified**: `node --check frontend/admin.js` passes; a standalone Node
+      test of `groupRequestsForReport_` against synthetic data confirmed
+      numeric-aware Employee ID ordering, blank-`CreditingDate`-sorts-last
+      within an employee, and correct subtotal-eligibility (multi-request
+      groups get a subtotal, single-request groups don't) — all assertions
+      passed. **Not yet checked in a real browser** — the subtotal row's
+      visual shading/bold styling in an actual print/PDF render, and whether
+      the reordered receipt-page sequence reads well end-to-end, still need a
+      manual pass.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /

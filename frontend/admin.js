@@ -606,6 +606,39 @@ function downloadTextFile_(filename, mimeType, text) {
   URL.revokeObjectURL(url);
 }
 
+// Groups requests by EmployeeID (primary) then CreditingDate (secondary,
+// blanks sorted last within an employee — a legacy/undisbursed row reads as
+// "not yet scheduled", not "earliest"), so the print-preview report can show
+// a per-employee-per-crediting-date subtotal instead of one flat list order.
+// Pure/no-HTML so it's easy to unit-test independently of the report markup.
+function groupRequestsForReport_(requests) {
+  var sorted = requests.slice().sort(function (a, b) {
+    var empCmp = String(a.EmployeeID || '').localeCompare(
+      String(b.EmployeeID || ''), undefined, { numeric: true });
+    if (empCmp !== 0) return empCmp;
+    var aTime = a.CreditingDate ? new Date(a.CreditingDate).getTime() : Infinity;
+    var bTime = b.CreditingDate ? new Date(b.CreditingDate).getTime() : Infinity;
+    return aTime - bTime;
+  });
+
+  var groups = [];
+  var byKey = {};
+  sorted.forEach(function (req) {
+    var key = (req.EmployeeID || '') + '|' + (req.CreditingDate || '');
+    if (!byKey[key]) {
+      byKey[key] = {
+        employeeId: req.EmployeeID,
+        employeeName: req.EmployeeName,
+        creditingDate: req.CreditingDate,
+        requests: []
+      };
+      groups.push(byKey[key]);
+    }
+    byKey[key].requests.push(req);
+  });
+  return groups;
+}
+
 // Builds the print-preview report as a single HTML string: a summary table
 // followed by one full-page receipt image per line item, then a trailing
 // note listing any line with no ReceiptFileURL. Uses driveThumbnailUrl_
@@ -614,18 +647,33 @@ function downloadTextFile_(filename, mimeType, text) {
 // backend byte-fetching action is needed the way jsPDF's addImage required.
 function buildExportReportHtml_(requests) {
   var now = new Date().toLocaleDateString();
+  var groups = groupRequestsForReport_(requests);
 
-  var summaryRows = requests.map(function (req) {
-    return '<tr>' +
-      '<td>' + escapeHtml_(req.RequestID) + '</td>' +
-      '<td>' + escapeHtml_(req.EmployeeName) + '</td>' +
-      '<td>' + escapeHtml_(STATUS_DISPLAY_LABELS[req.Status] || req.Status) + '</td>' +
-      '<td>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
-      '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ApprovedDate)) + '</td>' +
-      '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ReviewedDate)) + '</td>' +
-      '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.AuthorizedDate)) + '</td>' +
-      '<td>' + escapeHtml_(formatDateDisplay(req.CreditingDate)) + '</td>' +
-      '</tr>';
+  var summaryRows = groups.map(function (g) {
+    var rows = g.requests.map(function (req) {
+      return '<tr>' +
+        '<td>' + escapeHtml_(req.RequestID) + '</td>' +
+        '<td>' + escapeHtml_(req.EmployeeName) + '</td>' +
+        '<td>' + escapeHtml_(STATUS_DISPLAY_LABELS[req.Status] || req.Status) + '</td>' +
+        '<td>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
+        '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ApprovedDate)) + '</td>' +
+        '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ReviewedDate)) + '</td>' +
+        '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.AuthorizedDate)) + '</td>' +
+        '<td>' + escapeHtml_(formatDateDisplay(req.CreditingDate)) + '</td>' +
+        '</tr>';
+    }).join('');
+    // Only shown for multi-request groups — a subtotal that just repeats a
+    // single row's own Total column would be noise, not new information.
+    if (g.requests.length > 1) {
+      var subtotal = g.requests.reduce(function (s, r) { return s + (Number(r.TotalAmount) || 0); }, 0);
+      var label = 'Subtotal — ' + escapeHtml_(g.employeeName) + ' — Crediting ' +
+        (g.creditingDate ? escapeHtml_(formatDateDisplay(g.creditingDate)) : 'N/A');
+      rows += '<tr class="subtotal-row">' +
+        '<td colspan="3">' + label + '</td>' +
+        '<td>' + escapeHtml_(formatCurrency(subtotal)) + '</td>' +
+        '<td colspan="4"></td></tr>';
+    }
+    return rows;
   }).join('');
 
   var grandTotal = requests.reduce(function (sum, req) { return sum + (Number(req.TotalAmount) || 0); }, 0);
@@ -638,33 +686,38 @@ function buildExportReportHtml_(requests) {
   var missing = [];
   var fareItems = [];
   var mealItems = [];
-  requests.forEach(function (req) {
-    (req.lines || []).forEach(function (line) {
-      if (!line.ReceiptFileURL) {
-        missing.push(req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-          formatLineDateDisplay_(line) + ' — ' + line.Category + ' (No receipt on file)');
-        return;
-      }
-      var amountCaption = line.Category === 'Timesheet' ? '' : (' — ' + formatCurrency(line.Amount));
-      // Repeats the summary table's ApprovedBy/ReviewedBy/AuthorizedBy on
-      // every receipt page too, so whoever is flipping through printed
-      // receipts doesn't have to page back to the summary table to see who
-      // signed off — ApprovedBy is always present (a prerequisite of both
-      // exportable statuses), ReviewedBy likewise, AuthorizedBy only once
-      // actually Disbursed.
-      var approverParts = ['Approved by ' + req.ApprovedBy];
-      if (req.ReviewedBy) approverParts.push('Reviewed by ' + req.ReviewedBy);
-      if (req.AuthorizedBy) approverParts.push('Verified by ' + req.AuthorizedBy);
-      var item = {
-        caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-          formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
-        approvers: approverParts.join(' · '),
-        url: driveThumbnailUrl_(line.ReceiptFileURL)
-      };
-      // Timesheet receipts stay in the 2-per-page fareItems bucket — a
-      // full-page reference document suits that legible layout better than
-      // the 6-up grid meant for small allowance slips.
-      (line.Category === 'Meal Allowance' ? mealItems : fareItems).push(item);
+  // Iterates the same Employee ID -> Crediting Date grouping as the summary
+  // table above, so the itemized receipt pages read as coherent per-employee
+  // packets rather than the DateSubmitted-descending order requests arrive in.
+  groups.forEach(function (g) {
+    g.requests.forEach(function (req) {
+      (req.lines || []).forEach(function (line) {
+        if (!line.ReceiptFileURL) {
+          missing.push(req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+            formatLineDateDisplay_(line) + ' — ' + line.Category + ' (No receipt on file)');
+          return;
+        }
+        var amountCaption = line.Category === 'Timesheet' ? '' : (' — ' + formatCurrency(line.Amount));
+        // Repeats the summary table's ApprovedBy/ReviewedBy/AuthorizedBy on
+        // every receipt page too, so whoever is flipping through printed
+        // receipts doesn't have to page back to the summary table to see who
+        // signed off — ApprovedBy is always present (a prerequisite of both
+        // exportable statuses), ReviewedBy likewise, AuthorizedBy only once
+        // actually Disbursed.
+        var approverParts = ['Approved by ' + req.ApprovedBy];
+        if (req.ReviewedBy) approverParts.push('Reviewed by ' + req.ReviewedBy);
+        if (req.AuthorizedBy) approverParts.push('Verified by ' + req.AuthorizedBy);
+        var item = {
+          caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
+            formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
+          approvers: approverParts.join(' · '),
+          url: driveThumbnailUrl_(line.ReceiptFileURL)
+        };
+        // Timesheet receipts stay in the 2-per-page fareItems bucket — a
+        // full-page reference document suits that legible layout better than
+        // the 6-up grid meant for small allowance slips.
+        (line.Category === 'Meal Allowance' ? mealItems : fareItems).push(item);
+      });
     });
   });
 
@@ -740,6 +793,7 @@ function buildExportReportHtml_(requests) {
     '.receipt-page-6up .receipt-approvers { font-size: 7px; margin-bottom: 3px; }' +
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.grand-total-row td { border-top: 2px solid #1e3a5f; }' +
+    '.subtotal-row td { background: #eef2f7; font-weight: bold; border-top: 1px solid #94a3b8; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +
     '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
     '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
