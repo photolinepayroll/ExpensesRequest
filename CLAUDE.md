@@ -65,10 +65,10 @@ sequential IDs, export PDF fix) and item 10 (Authorizer submission exemption) ar
 and confirmed via `curl` against the real `/exec` URL. Items 7-9 are all 100% frontend,
 no backend push/deploy needed — live as soon as the static files are served. Item 11
 (concurrency/lag fix + exemption search speedup) is also fully deployed —
-`clasp deploy -i` was run against the same deployment, now `@36`. Items 12-13 (Print
+`clasp deploy -i` was run against the same deployment, now `@36`. Items 12-14 (Print
 Preview Employee ID grouping/subtotal, Grand Total/signature fix, export filter
-selection + post-cycle My Requests hiding) are also 100% frontend — no backend
-push/deploy needed.
+selection + post-cycle My Requests hiding, explicit row-selection for export + filter
+bar restyle) are also 100% frontend — no backend push/deploy needed.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -346,6 +346,56 @@ push/deploy needed.
       end-to-end, and a real Disbursed request actually disappearing from an
       employee's My Requests the day after its CreditingDate (can't be
       verified live without a real date rollover or adjusted test data).
+
+14. **Explicit row-selection for Export/Print, dropped the Date Requested filter,
+    restyled the filter bar.** User (in Filipino) asked for a real way to hand-pick
+    exactly which requests get exported/printed (example: check exactly 3 requests,
+    only those appear in Print Preview) instead of only being able to narrow via
+    filters; asked to remove the "Date requested — from/to" filter entirely; and
+    asked for the filter bar's UI/UX to look cleaner. 100% frontend (`admin.html`,
+    `admin.js`, `styles.css`), no backend/deploy needed. Confirmed via clarifying
+    questions: one shared checkbox column, always rendered on the "Reviewed &
+    Disbursed" table regardless of status filter/role (previously checkboxes only
+    appeared when filtering "Reviewed" as a Verifier, for bulk-disburse) — the same
+    checks also still drive the existing bulk-disburse bar whenever that happens to
+    be eligible; and when nothing is checked, export falls back to the current
+    filtered-view behavior, unchanged.
+    - New module-level `historyExportSelection_` (array of checked RequestIDs),
+      reset to `[]` at the top of every `loadAdminHistory()` run. `renderRequestsTable`
+      is now always called with `selectable: true`; its `onSelectionChange` updates
+      `historyExportSelection_` unconditionally and *additionally* calls
+      `historyBulkController_.updateSelection(selectedIds)` only when `bulkEligible`
+      is also true — decoupling "can select rows for export" from "can bulk-advance
+      the selection," which used to be the same gate.
+    - `fetchExportableRequests_` now checks `historyExportSelection_` first: if
+      non-empty, filters `loadJoinedRequests_()`'s result to just those RequestIDs
+      (bypassing the Status/Name/Crediting-Date filters entirely — an explicit pick
+      always wins); otherwise falls back to `getFilteredHistoryRequests_`, exactly
+      as the prior session left it.
+    - New `updateExportSelectionIndicator_(count)` writes a small hint line ("N
+      requests selected — export will use only these") near the export buttons,
+      cleared on every reload — the only UI feedback that a selection is active,
+      since the checkboxes alone don't make the effect on Export obvious.
+    - **Removed** the `admin-history-date-from`/`-to` (Date Requested/`DateSubmitted`)
+      filter entirely — fields deleted from `admin.html`, their filter block and
+      event listeners removed from `admin.js`. The Crediting Date range filter
+      (added last session) is unaffected and remains the only date-range filter.
+    - **Filter bar restyle**: the filter fields are now wrapped in a `.filter-panel`
+      (light inset background, `--color-bg`, distinct from the white `.card`) with a
+      small "Filters" header and a new "Clear filters" button
+      (`#btn-clear-history-filters`, resets Stage to `Reviewed` and clears
+      Name/Crediting Date, then reloads) — new `.filter-panel`/`.filter-panel-header`/
+      `.filter-panel-title`/`.btn-link`/`.export-selection-hint` rules in `styles.css`.
+    - **Verified**: `node --check frontend/admin.js` passes; confirmed no dangling
+      references to the removed `admin-history-date-from`/`-to` IDs remain anywhere
+      in `frontend/`; a standalone Node test of the selection-vs-filter logic
+      confirmed an explicit 3-item selection is returned exactly and ignores an
+      active Status filter that would otherwise exclude them, an empty selection
+      falls back to the filtered view, and a stale/nonexistent selected ID is
+      silently ignored rather than crashing. **Not yet checked in a real browser**:
+      the new filter-panel/hint visual appearance, checking specific rows and
+      confirming Export CSV/Print Preview include exactly those, and "Clear
+      filters" resetting the view correctly.
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /

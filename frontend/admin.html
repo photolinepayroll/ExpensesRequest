@@ -106,36 +106,35 @@
             </div>
           </div>
           <div class="msg msg-error hidden" id="export-error" role="alert"></div>
-          <div class="field-row">
-            <div class="field">
-              <label for="admin-history-filter">Filter by stage</label>
-              <select id="admin-history-filter">
-                <option value="Reviewed">Reviewed</option>
-                <option value="Authorized">Disbursed</option>
-                <option value="All">All</option>
-              </select>
+          <div class="filter-panel">
+            <div class="filter-panel-header">
+              <span class="filter-panel-title">Filters</span>
+              <button type="button" class="btn-link" id="btn-clear-history-filters">Clear filters</button>
             </div>
-            <div class="field">
-              <label for="admin-history-name-filter">Employee name</label>
-              <input type="text" id="admin-history-name-filter" placeholder="Filter by employee name">
-            </div>
-            <div class="field">
-              <label for="admin-history-date-from">Date requested — from</label>
-              <input type="date" id="admin-history-date-from">
-            </div>
-            <div class="field">
-              <label for="admin-history-date-to">Date requested — to</label>
-              <input type="date" id="admin-history-date-to">
-            </div>
-            <div class="field">
-              <label for="admin-history-crediting-date-from">Crediting date — from</label>
-              <input type="date" id="admin-history-crediting-date-from">
-            </div>
-            <div class="field">
-              <label for="admin-history-crediting-date-to">Crediting date — to</label>
-              <input type="date" id="admin-history-crediting-date-to">
+            <div class="field-row">
+              <div class="field">
+                <label for="admin-history-filter">Filter by stage</label>
+                <select id="admin-history-filter">
+                  <option value="Reviewed">Reviewed</option>
+                  <option value="Authorized">Disbursed</option>
+                  <option value="All">All</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="admin-history-name-filter">Employee name</label>
+                <input type="text" id="admin-history-name-filter" placeholder="Filter by employee name">
+              </div>
+              <div class="field">
+                <label for="admin-history-crediting-date-from">Crediting date — from</label>
+                <input type="date" id="admin-history-crediting-date-from">
+              </div>
+              <div class="field">
+                <label for="admin-history-crediting-date-to">Crediting date — to</label>
+                <input type="date" id="admin-history-crediting-date-to">
+              </div>
             </div>
           </div>
+          <p class="export-selection-hint" id="export-selection-hint"></p>
           <div id="bulk-action-bar-history" class="bulk-action-bar hidden">
             <span id="bulk-selection-summary-history">0 selected</span>
             <input type="text" id="bulk-remarks-history" class="bulk-remarks" placeholder="Remarks (optional, applies to all selected)">

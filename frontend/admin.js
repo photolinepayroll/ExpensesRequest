@@ -70,10 +70,15 @@ function initAdminView() {
   $('admin-status-filter').addEventListener('change', loadAdminRequests);
   $('admin-history-filter').addEventListener('change', loadAdminHistory);
   $('admin-history-name-filter').addEventListener('input', loadAdminHistory);
-  $('admin-history-date-from').addEventListener('change', loadAdminHistory);
-  $('admin-history-date-to').addEventListener('change', loadAdminHistory);
   $('admin-history-crediting-date-from').addEventListener('change', loadAdminHistory);
   $('admin-history-crediting-date-to').addEventListener('change', loadAdminHistory);
+  $('btn-clear-history-filters').addEventListener('click', function () {
+    $('admin-history-filter').value = 'Reviewed';
+    $('admin-history-name-filter').value = '';
+    $('admin-history-crediting-date-from').value = '';
+    $('admin-history-crediting-date-to').value = '';
+    loadAdminHistory();
+  });
   $('tab-admin-queue').addEventListener('click', function () { setAdminTab('queue'); });
   $('tab-admin-history').addEventListener('click', function () { setAdminTab('history'); });
   $('tab-admin-exemptions').addEventListener('click', function () { setAdminTab('exemptions'); });
@@ -269,10 +274,6 @@ function getFilteredHistoryRequests_(allRequests) {
   // (loadJoinedRequests_ already returns the complete unfiltered dataset);
   // these are purely additive search filters over that full history.
   var nameFilter = $('admin-history-name-filter').value.trim().toLowerCase();
-  var dateFromRaw = $('admin-history-date-from').value; // 'YYYY-MM-DD' or ''
-  var dateToRaw = $('admin-history-date-to').value;
-  var dateFrom = dateFromRaw ? new Date(dateFromRaw + 'T00:00:00') : null;
-  var dateTo = dateToRaw ? new Date(dateToRaw + 'T23:59:59') : null;
   var cdFromRaw = $('admin-history-crediting-date-from').value;
   var cdToRaw = $('admin-history-crediting-date-to').value;
   var cdFrom = cdFromRaw ? new Date(cdFromRaw + 'T00:00:00') : null;
@@ -287,12 +288,6 @@ function getFilteredHistoryRequests_(allRequests) {
 
     if (nameFilter && (req.EmployeeName || '').toLowerCase().indexOf(nameFilter) === -1) return false;
 
-    if (dateFrom || dateTo) {
-      var submitted = new Date(req.DateSubmitted);
-      if (dateFrom && submitted < dateFrom) return false;
-      if (dateTo && submitted > dateTo) return false;
-    }
-
     if (cdFrom || cdTo) {
       // Reviewed-only rows have no CreditingDate yet — excluded whenever
       // this filter is actively narrowing by a crediting date range.
@@ -306,10 +301,25 @@ function getFilteredHistoryRequests_(allRequests) {
   });
 }
 
+// Currently-checked RequestIDs on the "Reviewed & Disbursed" table, tracked
+// independently of bulk-disburse eligibility so a Verifier/Reviewer/whoever
+// can always hand-pick exactly which requests Export CSV/Print Preview
+// should use (see fetchExportableRequests_) — reset on every reload since
+// freshly-rendered checkboxes always start unchecked.
+var historyExportSelection_ = [];
+
+function updateExportSelectionIndicator_(count) {
+  $('export-selection-hint').textContent = count > 0
+    ? count + ' request' + (count === 1 ? '' : 's') + ' selected — export will use only these'
+    : '';
+}
+
 function loadAdminHistory() {
   var container = $('admin-history-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
   var statusFilter = $('admin-history-filter').value; // 'Reviewed' | 'Authorized' | 'All'
+  historyExportSelection_ = [];
+  updateExportSelectionIndicator_(0);
 
   loadJoinedRequests_()
     .then(function (allRequests) {
@@ -322,8 +332,16 @@ function loadAdminHistory() {
 
       renderRequestsTable(container, requests, {
         showEmployee: true,
-        selectable: bulkEligible,
-        onSelectionChange: bulkEligible ? historyBulkController_.updateSelection : undefined,
+        // Always selectable now — the checkbox column doubles as "pick which
+        // requests to export/print," independent of bulk-disburse eligibility.
+        // When bulkEligible also happens to be true (Reviewed + Verifier),
+        // the same checks additionally drive the bulk-disburse bar below.
+        selectable: true,
+        onSelectionChange: function (selectedIds) {
+          historyExportSelection_ = selectedIds;
+          updateExportSelectionIndicator_(selectedIds.length);
+          if (bulkEligible) historyBulkController_.updateSelection(selectedIds);
+        },
         isLineEditable: isLineEditableForCurrentApprover_,
         onSaveAmount: saveLineItemAmount_,
         onDetailRendered: adminOnDetailRendered_
@@ -1046,11 +1064,18 @@ function initExportButtons_() {
 // Pending-routing-scoped anyway (same as the server), so no client-side
 // scoping logic is needed here, just a plain status filter.
 function fetchExportableRequests_() {
-  // Reuses the exact same criteria as the on-screen "Reviewed & Disbursed"
-  // table (Status + Employee Name + Date Requested + Crediting Date range),
-  // so Export CSV / Print Preview only ever export what's currently
-  // selected/filtered on screen — not an independent, filter-blind fetch.
-  return loadJoinedRequests_().then(getFilteredHistoryRequests_);
+  // If the user hand-picked specific rows via the checkbox column, export
+  // exactly those and nothing else — an explicit selection always overrides
+  // the filters. Otherwise, fall back to exporting everything the on-screen
+  // filters (Status + Employee Name + Crediting Date range) currently show.
+  return loadJoinedRequests_().then(function (all) {
+    if (historyExportSelection_.length) {
+      return all.filter(function (req) {
+        return historyExportSelection_.indexOf(req.RequestID) !== -1;
+      });
+    }
+    return getFilteredHistoryRequests_(all);
+  });
 }
 
 function handleExportCsvClick_() {

@@ -744,6 +744,45 @@ for the exact done/not-done breakdown, summarized here:**
       `CLAUDE.md`/`resume.md` updated and this session's change committed/pushed to
       GitHub as the user's explicit next ask; no backend/deploy step needed.
 
+32. Same session, user (in Filipino) asked for a more direct export mechanism: check
+    exactly which requests (e.g. 3 specific ones) and only those go into Print
+    Preview/Export CSV; remove the "Date requested — from/to" filter entirely; and
+    clean up the filter bar's UI/UX. Confirmed via clarifying questions (also in
+    Filipino): one shared checkbox column, always available on the "Reviewed &
+    Disbursed" table regardless of status filter or role (previously checkboxes only
+    rendered when filtering "Reviewed" as a Verifier, for bulk-disburse — that gate
+    needed decoupling from "can select rows for export"); and when nothing is
+    checked, export falls back to the existing filtered-view behavior, unchanged.
+    100% frontend (`admin.html`, `admin.js`, `styles.css`).
+    - New module-level `historyExportSelection_`, reset every `loadAdminHistory()`
+      run. `renderRequestsTable` is now always called with `selectable: true`; its
+      `onSelectionChange` always updates `historyExportSelection_`, and additionally
+      calls `historyBulkController_.updateSelection` only when the existing
+      bulk-disburse eligibility (`bulkEligible`) also happens to be true — so the
+      same checkbox column now serves two independent purposes without either one
+      blocking the other.
+    - `fetchExportableRequests_` checks the explicit selection first (bypassing all
+      filters when non-empty) before falling back to `getFilteredHistoryRequests_`.
+    - Removed `admin-history-date-from`/`-to` (the `DateSubmitted`-based "Date
+      requested" range) entirely — fields, filter logic, and event listeners all
+      deleted. The Crediting Date range filter (added last session) is unaffected.
+    - Filter bar restyled into a `.filter-panel` (light inset background, small
+      "Filters" header, new "Clear filters" button resetting Stage/Name/Crediting
+      Date and reloading) instead of floating fields directly under the card
+      header; added a small "N requests selected — export will use only these"
+      hint line near the export buttons so the otherwise-invisible selection
+      effect on Export is visible.
+    - **Verified**: `node --check` passes; confirmed no dangling references to the
+      removed date-filter IDs remain anywhere in `frontend/`; a standalone Node
+      test confirmed an explicit selection of 3 is returned exactly (ignoring an
+      active Status filter that would otherwise exclude them), an empty selection
+      falls back to the filtered view, and a stale selected ID is silently ignored.
+    - **Not yet done**: no real-browser check of the new filter-panel/hint visual
+      appearance, checking specific rows and confirming Export CSV/Print Preview
+      include exactly those, or the "Clear filters" button. `CLAUDE.md`/`resume.md`
+      updated and committed/pushed to GitHub as the user's explicit next ask; no
+      backend/deploy step needed.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.
