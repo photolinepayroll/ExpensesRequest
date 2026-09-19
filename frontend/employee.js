@@ -640,6 +640,11 @@ function proceedWithSubmit_(errorEl, successEl) {
   }
 
   var submittedLines;
+  // Generated once per submit click and reused across every automatic
+  // network/busy retry of this same attempt, so a slow request that the
+  // client times out and retries (while the server is still or already
+  // finished processing it) doesn't create multiple duplicate requests.
+  var clientRequestId = generateClientRequestId_();
 
   Promise.resolve()
     .then(collectLineItems)
@@ -648,7 +653,8 @@ function proceedWithSubmit_(errorEl, successEl) {
       return runServer('submitLiquidationRequest', {
         employeeId: currentEmployee.EmployeeID,
         employeeName: currentEmployee.Name,
-        lines: lines
+        lines: lines,
+        clientRequestId: clientRequestId
       });
     })
     .then(function (result) {

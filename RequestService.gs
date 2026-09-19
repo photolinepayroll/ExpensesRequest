@@ -9,7 +9,39 @@
 // points in this app share one LockService.getScriptLock()). Phases 1 and 3
 // each do only fast, local (PropertiesService/Sheet) work under the lock;
 // Phase 2's Drive I/O runs unlocked in between.
+// Idempotency: a slow submission (Phase 2's Drive upload in particular) can
+// outlast the client's fetch timeout, causing the frontend's retry layer to
+// resend an identical POST while the original call is still running or has
+// already finished server-side (aborting the client fetch does not cancel
+// the Apps Script execution). Without a dedupe key, each retry would create
+// its own fully independent request row. `clientRequestId` — generated once
+// per submit click and reused unchanged across the frontend's own retries —
+// lets us collapse those into a single result via CacheService, the same
+// primitive StoreDirectoryService.gs already uses for caching.
+var SUBMIT_DEDUPE_CACHE_PREFIX_ = 'submitdedupe_';
+var SUBMIT_DEDUPE_IN_PROGRESS_ = 'IN_PROGRESS';
+var SUBMIT_DEDUPE_RESULT_TTL_SECONDS_ = 3600; // 1 hour — comfortably covers any retry storm
+var SUBMIT_DEDUPE_MARKER_TTL_SECONDS_ = 21600; // CacheService's max (6h)
+var SUBMIT_DEDUPE_POLL_INTERVAL_MS_ = 1500;
+var SUBMIT_DEDUPE_POLL_ATTEMPTS_ = 10; // ~15s total
+
+function getSubmitDedupeResult_(cache, key) {
+  var cached = cache.get(key);
+  if (cached && cached !== SUBMIT_DEDUPE_IN_PROGRESS_) {
+    return JSON.parse(cached);
+  }
+  return null;
+}
+
 function submitLiquidationRequest(payload) {
+  var cache = CacheService.getScriptCache();
+  var dedupeKey = payload.clientRequestId ? SUBMIT_DEDUPE_CACHE_PREFIX_ + payload.clientRequestId : null;
+
+  if (dedupeKey) {
+    var alreadyDone = getSubmitDedupeResult_(cache, dedupeKey);
+    if (alreadyDone) return alreadyDone;
+  }
+
   var validationError = validateSubmission_(payload);
   if (validationError) {
     return { success: false, error: validationError };
@@ -29,10 +61,39 @@ function submitLiquidationRequest(payload) {
     return { success: false, error: 'System is busy, please try again.' };
   }
   var requestId;
+  var awaitDedupeResult = false;
   try {
-    requestId = generateRequestId_();
+    if (dedupeKey) {
+      var cachedInLock = cache.get(dedupeKey);
+      if (cachedInLock === SUBMIT_DEDUPE_IN_PROGRESS_) {
+        // A duplicate retry landed while the original call (for this same
+        // clientRequestId) is still running — don't start a second copy of
+        // the work, wait for the original to publish its result instead.
+        awaitDedupeResult = true;
+      } else if (cachedInLock) {
+        return JSON.parse(cachedInLock);
+      } else {
+        cache.put(dedupeKey, SUBMIT_DEDUPE_IN_PROGRESS_, SUBMIT_DEDUPE_MARKER_TTL_SECONDS_);
+      }
+    }
+    if (!awaitDedupeResult) {
+      requestId = generateRequestId_();
+    }
   } finally {
     lock.releaseLock();
+  }
+
+  if (awaitDedupeResult) {
+    for (var attempt = 0; attempt < SUBMIT_DEDUPE_POLL_ATTEMPTS_; attempt++) {
+      Utilities.sleep(SUBMIT_DEDUPE_POLL_INTERVAL_MS_);
+      var polled = getSubmitDedupeResult_(cache, dedupeKey);
+      if (polled) return polled;
+    }
+    // Original call still hasn't finished — ask the client to back off and
+    // retry, the same shape it already knows how to handle; by the time it
+    // does, the result should be cached and will be replayed instead of
+    // creating a new request.
+    return { success: false, error: 'System is busy, please try again.' };
   }
 
   // Phase 2 (no lock): receipt uploads to Drive happen here, unlocked.
@@ -69,6 +130,7 @@ function submitLiquidationRequest(payload) {
       };
     });
   } catch (e) {
+    if (dedupeKey) cache.remove(dedupeKey);
     return { success: false, error: 'Submission failed: ' + e.message };
   }
 
@@ -82,6 +144,7 @@ function submitLiquidationRequest(payload) {
   try {
     lock2.waitLock(20000);
   } catch (e) {
+    if (dedupeKey) cache.remove(dedupeKey);
     return { success: false, error: 'System is busy, please try again.' };
   }
 
@@ -101,8 +164,11 @@ function submitLiquidationRequest(payload) {
     });
 
     SpreadsheetApp.flush();
-    return { success: true, requestId: requestId };
+    var result = { success: true, requestId: requestId };
+    if (dedupeKey) cache.put(dedupeKey, JSON.stringify(result), SUBMIT_DEDUPE_RESULT_TTL_SECONDS_);
+    return result;
   } catch (e) {
+    if (dedupeKey) cache.remove(dedupeKey);
     return { success: false, error: 'Submission failed: ' + e.message };
   } finally {
     lock2.releaseLock();

@@ -30,6 +30,17 @@ function escapeHtml_(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) { return ESCAPE_HTML_MAP[c]; });
 }
 
+// One ID per submit attempt, reused across every automatic client-side retry
+// of that same attempt (fetchWithRetry_/fetchJsonWithRetry_ resend the same
+// request body unchanged) so the backend can collapse retried duplicates of
+// one submission into a single result instead of creating a new row each time.
+function generateClientRequestId_() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return Date.now() + '-' + Math.random().toString(36).slice(2);
+}
+
 function formatCurrency(n) {
   var num = Number(n) || 0;
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });

@@ -830,6 +830,78 @@ for the exact done/not-done breakdown, summarized here:**
       adjusted test data), and the new "Rejected" option's appearance/behavior in the
       Reviewed & Disbursed tab and its CSV/Print Preview export.
 
+34. New session, resumed via `resume.md`/`CLAUDE.md`, then the user reported that
+    submitting a new request sometimes takes a long time and ends up appearing in
+    "My Requests" **3-5 times, each with a different sequential RequestID**. Root
+    cause found by tracing the actual retry/lock code (not guessed): `submitLiquidationRequest`
+    (`RequestService.gs`) has no idempotency key at all — every call unconditionally
+    generates a new `REQ#000xxx` and appends full new rows — while `frontend/common.js`'s
+    `fetchWithRetry_`/`fetchJsonWithRetry_` retry layer (added for mobile network
+    resilience, see item 28) resends the *exact same POST body* as a brand-new request
+    on a 25s timeout/network failure/busy response, and aborting the client's `fetch()`
+    does **not** cancel the Apps Script execution already running server-side (confirmed
+    via the existing 302→echo-redirect-URL comment already in `common.js`) — so a slow
+    submission (Phase 2's unlocked Drive upload is the likely slow part) can finish
+    successfully on the server while the client, having already timed out and retried
+    2-4 more times, ends up creating that many independent duplicate requests.
+    - Backend fix, `RequestService.gs`'s `submitLiquidationRequest`: added a dedupe
+      layer keyed by a new `payload.clientRequestId`, using
+      `CacheService.getScriptCache()` (same primitive `StoreDirectoryService.gs`
+      already uses) — reuses the existing Phase 1 `LockService` lock rather than
+      adding a new one. Before validation, a `clientRequestId` whose final result is
+      already cached short-circuits to that cached result (no new ID, no re-upload,
+      no re-write). Inside the Phase 1 lock, an `'IN_PROGRESS'` marker is written for
+      a first-seen `clientRequestId` before releasing the lock; a near-concurrent
+      duplicate call that finds that marker releases the lock and does a short bounded
+      poll (`Utilities.sleep`, ~15s total) waiting for the original call's real result
+      to appear, returning it once it does — rather than returning a generic error or
+      racing to do the same Drive upload/Sheet writes twice. A poll timeout, and every
+      failure path in Phase 2/3, fall back to/clear the marker respectively so a
+      genuinely failed submission can still be retried fresh rather than getting stuck
+      replaying `IN_PROGRESS` or a stale failure forever. Calls with no
+      `clientRequestId` (e.g. a stale cached frontend page) behave exactly as before —
+      fully backward compatible, no schema/`setupSheets()` change.
+    - Frontend fix, `frontend/employee.js`'s `proceedWithSubmit_`: generates one
+      `clientRequestId` (new `generateClientRequestId_()` helper added to
+      `frontend/common.js`, `crypto.randomUUID()` with a `Date.now()+Math.random()`
+      fallback) once per submit click, before the `runServer('submitLiquidationRequest', ...)`
+      call — since `fetchWithRetry_`/`fetchJsonWithRetry_` resend the same `options`
+      object (and thus the same JSON body) across all of their own internal retries,
+      this ID stays identical across every automatic retry of that one click, which is
+      exactly the case the backend needs to collapse into one result. A later manual
+      re-click (only possible after the button re-enables on a genuine terminal error)
+      gets a fresh ID and is treated as a new, separate submission — an accepted, much
+      rarer edge case, not the reported bug.
+    - Deliberately left `common.js`'s retry/timeout/busy-backoff logic itself
+      untouched — it's a working, documented mitigation for transient network/
+      echo-redirect failures used by every other action in the app (logins,
+      approvals, etc.); the actual bug was that `submitLiquidationRequest` alone had
+      no way to tell "this is the same attempt retried" from "this is a new attempt,"
+      which this fix addresses directly instead of weakening retries app-wide.
+    - **Verified**: `node --check` passes on both touched frontend files and on a
+      temp-renamed copy of `RequestService.gs`; a standalone Node simulation of the
+      cache-based dedupe state machine (replay-after-success returns the *original*
+      `requestId` instead of creating a new one; a concurrent retry against an
+      `IN_PROGRESS` key waits and returns the original's real result once published;
+      independent `clientRequestId`s never interfere with each other; a failure clears
+      the marker so a genuine resubmit isn't stuck) — all assertions passed. `clasp
+      push -f` + `clasp deploy -i` against the existing live deployment
+      (`AKfycbyymBuUmMtShtXcw9YB8z-L9xsNwxIhnDZFSZJbt36wpWjyAQz4tDxZi-8CrVonRLoiSg`,
+      now `@38`) succeeded; a live `curl` smoke test (two identical POSTs with the same
+      `clientRequestId`, using a deliberately-invalid Employee ID so nothing gets
+      written to the live Sheet) confirmed the deployed code runs without error and
+      returns consistent, well-formed JSON on both calls.
+    - **Not yet done, by explicit user choice**: a true end-to-end live test (submit
+      a real request twice with the same `clientRequestId` and confirm only one real
+      row/RequestID results) was offered and the user chose to skip it rather than
+      write test data into the live production Sheet/Drive — asked to confirm via the
+      next genuine user submission instead. Also not yet observed: whether this
+      actually eliminates the reported duplicates in the wild (the root cause was
+      inferred from code tracing, not directly reproduced), and how the ~15s
+      `IN_PROGRESS` poll behaves under real concurrent load from multiple different
+      employees submitting near-simultaneously (should be unaffected, since it's keyed
+      per-`clientRequestId`, but hasn't been observed live).
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

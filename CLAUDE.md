@@ -69,7 +69,8 @@ no backend push/deploy needed — live as soon as the static files are served. I
 Preview Employee ID grouping/subtotal, Grand Total/signature fix, export filter
 selection + post-cycle My Requests hiding, explicit row-selection for export + filter
 bar restyle, post-cycle hiding extended to Rejected) are also 100% frontend — no
-backend push/deploy needed.
+backend push/deploy needed. Item 16 (duplicate-submission fix) is also deployed live —
+`clasp deploy -i` was run against the same deployment, now `@38`.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -436,6 +437,63 @@ backend push/deploy needed.
       disappearing from the queue/My Requests the day after rejection, and the new
       "Rejected" option's behavior in the Reviewed & Disbursed tab and its CSV/Print
       Preview export.
+
+16. **Fixed duplicate liquidation-request submissions (users reported the same
+    submission appearing 3-5x in My Requests, each with a different sequential
+    RequestID).** Root cause traced through the actual retry/lock code, not guessed:
+    `submitLiquidationRequest` had no idempotency key at all — every call
+    unconditionally generated a new `REQ#000xxx` and appended full new rows — while
+    `common.js`'s `fetchWithRetry_`/`fetchJsonWithRetry_` retry layer (added in item
+    11 for mobile network resilience) resends the identical POST body as a brand-new
+    request on a 25s timeout/network failure/busy response. Aborting the client's
+    `fetch()` does **not** cancel the Apps Script execution already running
+    server-side, so a slow submission (Phase 2's unlocked Drive upload is the likely
+    slow part) can finish successfully on the server while the client has already
+    timed out and retried 2-4 more times — each retry independently completing and
+    creating its own duplicate row.
+    - `RequestService.gs`'s `submitLiquidationRequest` gained a dedupe layer keyed by
+      a new `payload.clientRequestId`, using `CacheService.getScriptCache()` (the
+      same primitive `StoreDirectoryService.gs` already uses) and reusing the
+      existing Phase 1 `LockService` lock rather than adding a new one — see this
+      file's Architecture section above for the exact mechanics (pre-validation
+      cache short-circuit, an `'IN_PROGRESS'` marker written inside the Phase 1 lock,
+      a bounded ~15s poll for a near-concurrent duplicate call, and the marker being
+      cleared on any Phase 2/3 failure so a genuinely failed submission can still be
+      retried fresh). Calls with no `clientRequestId` behave exactly as before — fully
+      backward compatible, no schema/`setupSheets()` change.
+    - `frontend/employee.js`'s `proceedWithSubmit_` generates one `clientRequestId`
+      (new `generateClientRequestId_()` helper in `frontend/common.js`,
+      `crypto.randomUUID()` with a fallback) once per submit click, before calling
+      `runServer('submitLiquidationRequest', ...)` — since the retry layer resends
+      the same `options`/body across its own internal retries, this ID stays
+      identical across every automatic retry of that one click, which is exactly what
+      needs to collapse into one result. A later manual re-click (only possible after
+      a genuine terminal error re-enables the button) gets a fresh ID and is treated
+      as a separate submission — an accepted, much rarer edge case, not the reported
+      bug.
+    - `common.js`'s retry/timeout/busy-backoff logic itself was deliberately left
+      untouched — it's a working, documented mitigation for transient network/
+      echo-redirect failures shared by every other action in the app; this fix
+      addresses the actual gap (no way to tell "same attempt retried" from "new
+      attempt") instead of weakening retries app-wide.
+    - **Verified**: `node --check` passes on both touched frontend files and on a
+      temp-renamed copy of `RequestService.gs`; a standalone Node simulation of the
+      cache-based dedupe state machine (replay-after-success returns the original
+      `requestId`; a concurrent retry against an `IN_PROGRESS` key waits and returns
+      the original's real result once published; independent `clientRequestId`s never
+      interfere; a failure clears the marker so a genuine resubmit isn't stuck) — all
+      assertions passed. `clasp push -f` + `clasp deploy -i` against the existing live
+      deployment succeeded (now `@38`); a live `curl` smoke test (two identical POSTs
+      with the same `clientRequestId`, using a deliberately-invalid Employee ID so
+      nothing gets written to the live Sheet) confirmed the deployed code runs without
+      error and returns consistent, well-formed JSON on both calls.
+    - **Not yet done, by explicit user choice**: a true end-to-end live test (submit a
+      real request twice with the same `clientRequestId`, confirm only one real
+      row/RequestID results) was offered and skipped to avoid writing test data into
+      the live production Sheet/Drive — to be confirmed via the next genuine user
+      submission instead. Whether this actually eliminates the duplicates reported in
+      the wild has not yet been observed (the root cause was inferred from code
+      tracing, not directly reproduced).
 
 7. **"Senior Head" region-based Meal Allowance bracket.** `STORE_COORDINATES_CSV_URL`'s
    published sheet gained a new sub-table (columns 24-27: BIO ID / SENIOR HEAD name /
