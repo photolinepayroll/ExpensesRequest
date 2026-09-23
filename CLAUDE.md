@@ -70,7 +70,8 @@ Preview Employee ID grouping/subtotal, Grand Total/signature fix, export filter
 selection + post-cycle My Requests hiding, explicit row-selection for export + filter
 bar restyle, post-cycle hiding extended to Rejected) are also 100% frontend — no
 backend push/deploy needed. Item 16 (duplicate-submission fix) is also deployed live —
-`clasp deploy -i` was run against the same deployment, now `@38`.
+`clasp deploy -i` was run against the same deployment, now `@38`. Item 17 (Name/Bio ID
+search filter) is also 100% frontend — no backend push/deploy needed.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -562,6 +563,36 @@ backend push/deploy needed. Item 16 (duplicate-submission fix) is also deployed 
      confirm the fix resolves it without touching the other tab's panel. **Not yet checked in a
      real browser** — Prev/Next positioning, arrow-key nav, and bulk-approve/bulk-reject on all
      three bars still need a manual pass.
+
+17. **Combined "Search by name or Bio ID" filter added to both admin.html tabs.** User
+    (in Filipino) asked for a way to filter the "Liquidation Requests" queue tab by
+    employee name or Bio ID — confirmed via clarifying questions: one combined search
+    box (not two separate fields), and the same box added to the "Reviewed & Disbursed"
+    history tab too (replacing its previous Employee Name-only filter, item 14) for
+    consistency. 100% frontend (`frontend/admin.html`, `frontend/admin.js`), no
+    backend/schema/deploy needed — "Bio ID" in this app is just `EmployeeID` (the
+    employee-facing UI already renamed "Employee ID" to "Biometric ID no.", see
+    `resume.md` item 8; there is no separate BiometricID field on Employees — that
+    column exists only on the `Approvers` sheet, identifying approvers, not employees),
+    and `EmployeeID`/`EmployeeName` are already present on every request object from
+    `loadJoinedRequests_()`.
+    - Queue tab's previously bare Stage `<select>` is now wrapped in a `.filter-panel`
+      (reusing the history tab's existing filter-bar structure/CSS from item 14 — no
+      new CSS) with a `.field-row` containing the Stage select plus a new
+      `#admin-queue-search-filter` text input, and a new `#btn-clear-queue-filters`
+      resetting Stage to `'Pending'` and the search box to empty.
+    - History tab's `#admin-history-name-filter` was renamed to
+      `#admin-history-search-filter` with the same combined label/placeholder.
+    - `admin.js`'s `loadAdminRequests()` and `getFilteredHistoryRequests_()` both gained
+      an identical lowercased-substring match against either `req.EmployeeName` or
+      `String(req.EmployeeID)`, ANDed into each function's existing filter chain.
+      `fetchExportableRequests_` needed no changes — it already delegates to
+      `getFilteredHistoryRequests_`, so Export CSV/Print Preview automatically respect
+      the new search box too.
+    - **Verified**: `node --check frontend/admin.js` passes; confirmed no remaining
+      references to the old `admin-history-name-filter` id anywhere in `frontend/`.
+      **Not yet checked in a real browser** — searching by partial name, by Bio ID, and
+      "Clear filters" resetting both tabs still need a manual pass.
 
 9. **Mobile "Failed to fetch" resilience, Approver queue routing-scope widened to every status,
    and approver names added to Print Preview receipt captions.** All 100% frontend

@@ -66,14 +66,26 @@
           <div class="card-header-row">
             <h2>Liquidation Requests</h2>
           </div>
-          <div class="field hero-field" id="admin-status-filter-field">
-            <label for="admin-status-filter">Filter by stage</label>
-            <select id="admin-status-filter">
-              <option value="Pending">Pending</option>
-              <option value="Approved">Approved</option>
-              <option value="Rejected">Rejected</option>
-              <option value="All">All</option>
-            </select>
+          <div class="filter-panel">
+            <div class="filter-panel-header">
+              <span class="filter-panel-title">Filters</span>
+              <button type="button" class="btn-link" id="btn-clear-queue-filters">Clear filters</button>
+            </div>
+            <div class="field-row">
+              <div class="field" id="admin-status-filter-field">
+                <label for="admin-status-filter">Filter by stage</label>
+                <select id="admin-status-filter">
+                  <option value="Pending">Pending</option>
+                  <option value="Approved">Approved</option>
+                  <option value="Rejected">Rejected</option>
+                  <option value="All">All</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="admin-queue-search-filter">Search by name or Bio ID</label>
+                <input type="text" id="admin-queue-search-filter" placeholder="Employee name or Bio ID">
+              </div>
+            </div>
           </div>
           <div id="bulk-action-bar" class="bulk-action-bar hidden">
             <span id="bulk-selection-summary">0 selected</span>
@@ -122,8 +134,8 @@
                 </select>
               </div>
               <div class="field">
-                <label for="admin-history-name-filter">Employee name</label>
-                <input type="text" id="admin-history-name-filter" placeholder="Filter by employee name">
+                <label for="admin-history-search-filter">Search by name or Bio ID</label>
+                <input type="text" id="admin-history-search-filter" placeholder="Employee name or Bio ID">
               </div>
               <div class="field">
                 <label for="admin-history-crediting-date-from">Crediting date — from</label>

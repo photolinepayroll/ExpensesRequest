@@ -902,6 +902,41 @@ for the exact done/not-done breakdown, summarized here:**
       employees submitting near-simultaneously (should be unaffected, since it's keyed
       per-`clientRequestId`, but hasn't been observed live).
 
+35. New session, resumed via `resume.md`/`CLAUDE.md`, then the user asked (in Filipino)
+    to add a filter for employee name or Bio ID to the "Liquidation Requests" tab in
+    `admin.html`, used by Approvers/Reviewers/Verifiers to find requests. Confirmed via
+    clarifying questions: one combined search box ("Search by name or Bio ID") rather
+    than two separate fields, and the same combined search added to the "Reviewed &
+    Disbursed" history tab too (which previously had a separate Employee Name-only
+    filter, see item 14), for consistency across both tabs. 100% frontend
+    (`frontend/admin.html`, `frontend/admin.js`), no backend/schema/deploy needed — in
+    this app "Bio ID" is just `EmployeeID` (the employee-facing UI already renamed
+    "Employee ID" to "Biometric ID no.", item 8; there is no separate BiometricID field
+    on Employees — that column only exists on the `Approvers` sheet, identifying
+    approvers, not employees), and `EmployeeID`/`EmployeeName` are already present on
+    every request object from `loadJoinedRequests_()`.
+    - **Queue tab** (`view-admin-queue`): the previously bare Stage `<select>` is now
+      wrapped in a `.filter-panel` (reusing the exact structure/CSS from the history
+      tab's filter bar, item 14 — no new CSS needed) with a `.field-row` containing the
+      Stage select alongside a new `#admin-queue-search-filter` text input, plus a new
+      `#btn-clear-queue-filters` (`.btn-link`) that resets Stage to `'Pending'` and the
+      search box to empty, then reloads.
+    - **History tab**: the existing `#admin-history-name-filter` field was renamed to
+      `#admin-history-search-filter` with the same "Search by name or Bio ID" label/
+      placeholder, replacing its name-only behavior.
+    - `admin.js`'s `loadAdminRequests()` and `getFilteredHistoryRequests_()` both gained
+      an identical combined-match check — a lowercased substring match against either
+      `req.EmployeeName` or `String(req.EmployeeID)` — computed once per call and ANDed
+      into the existing status/routing/cutoff-date filter chain each function already
+      had. `fetchExportableRequests_` needed no changes since it already delegates to
+      `getFilteredHistoryRequests_`, so Export CSV/Print Preview automatically respect
+      the new search box too, same as the Crediting Date range filter before it.
+    - **Verified**: `node --check frontend/admin.js` passes; grepped the repo to confirm
+      no remaining references to the old `admin-history-name-filter` id anywhere in
+      `frontend/`. **Not yet checked in a real browser** — searching by partial name,
+      searching by Bio ID, and "Clear filters" resetting both tabs correctly all still
+      need a manual pass.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

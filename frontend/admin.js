@@ -68,13 +68,19 @@ function initAdminView() {
     showAdminView('view-login');
   });
   $('admin-status-filter').addEventListener('change', loadAdminRequests);
+  $('admin-queue-search-filter').addEventListener('input', loadAdminRequests);
+  $('btn-clear-queue-filters').addEventListener('click', function () {
+    $('admin-status-filter').value = 'Pending';
+    $('admin-queue-search-filter').value = '';
+    loadAdminRequests();
+  });
   $('admin-history-filter').addEventListener('change', loadAdminHistory);
-  $('admin-history-name-filter').addEventListener('input', loadAdminHistory);
+  $('admin-history-search-filter').addEventListener('input', loadAdminHistory);
   $('admin-history-crediting-date-from').addEventListener('change', loadAdminHistory);
   $('admin-history-crediting-date-to').addEventListener('change', loadAdminHistory);
   $('btn-clear-history-filters').addEventListener('click', function () {
     $('admin-history-filter').value = 'Reviewed';
-    $('admin-history-name-filter').value = '';
+    $('admin-history-search-filter').value = '';
     $('admin-history-crediting-date-from').value = '';
     $('admin-history-crediting-date-to').value = '';
     loadAdminHistory();
@@ -183,6 +189,7 @@ function loadAdminRequests() {
   var container = $('admin-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading requests...</p></div>';
   var statusFilter = $('admin-status-filter').value;
+  var searchFilter = $('admin-queue-search-filter').value.trim().toLowerCase();
   var queueStatuses = ['Pending', 'Approved', 'Rejected'];
 
   // Only Approver-role accounts have this whole tab scoped to what this
@@ -221,6 +228,12 @@ function loadAdminRequests() {
         // remains visible forever to Reviewer/Verifier on the "Reviewed &
         // Disbursed" audit tab regardless of this filter.
         if (req.Status === 'Rejected' && req.RejectedDate && isPastCutoffDate_(req.RejectedDate)) return false;
+
+        if (searchFilter) {
+          var nameMatch = (req.EmployeeName || '').toLowerCase().indexOf(searchFilter) !== -1;
+          var idMatch = String(req.EmployeeID || '').toLowerCase().indexOf(searchFilter) !== -1;
+          if (!nameMatch && !idMatch) return false;
+        }
 
         if (scopeToApprover) {
           var emp = employeeRows.filter(function (e) { return String(e.EmployeeID) === String(req.EmployeeID); })[0];
@@ -285,7 +298,7 @@ function getFilteredHistoryRequests_(allRequests) {
   // Permanent audit trail — this list is never time-windowed or capped
   // (loadJoinedRequests_ already returns the complete unfiltered dataset);
   // these are purely additive search filters over that full history.
-  var nameFilter = $('admin-history-name-filter').value.trim().toLowerCase();
+  var searchFilter = $('admin-history-search-filter').value.trim().toLowerCase();
   var cdFromRaw = $('admin-history-crediting-date-from').value;
   var cdToRaw = $('admin-history-crediting-date-to').value;
   var cdFrom = cdFromRaw ? new Date(cdFromRaw + 'T00:00:00') : null;
@@ -298,7 +311,11 @@ function getFilteredHistoryRequests_(allRequests) {
       return false;
     }
 
-    if (nameFilter && (req.EmployeeName || '').toLowerCase().indexOf(nameFilter) === -1) return false;
+    if (searchFilter) {
+      var nameMatch = (req.EmployeeName || '').toLowerCase().indexOf(searchFilter) !== -1;
+      var idMatch = String(req.EmployeeID || '').toLowerCase().indexOf(searchFilter) !== -1;
+      if (!nameMatch && !idMatch) return false;
+    }
 
     if (cdFrom || cdTo) {
       // Reviewed-only rows have no CreditingDate yet — excluded whenever
