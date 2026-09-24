@@ -94,6 +94,18 @@ function formatLineAmountDisplay_(line) {
   return line.Category === 'Timesheet' ? '—' : formatCurrency(line.Amount);
 }
 
+// A line an Approver/Reviewer/Verifier marked "Not included" (Amount forced
+// to 0, see RequestService.gs's setLineItemExclusion). The published CSV has
+// no boolean type, so this is the text "TRUE" (same as Employees.Active).
+function isLineExcluded_(line) {
+  return String(line.Excluded).toUpperCase() === 'TRUE';
+}
+
+function buildExcludedTagHtml_(line) {
+  return '<span class="badge badge-rejected excluded-tag">Not included</span>' +
+    (line.ExcludedReason ? ' <span class="muted excluded-reason">' + escapeHtml_(line.ExcludedReason) + '</span>' : '');
+}
+
 var STATUS_BADGE_CLASSES = {
   Pending: 'badge-pending',
   Reviewed: 'badge-reviewed',
@@ -222,11 +234,12 @@ function buildLineItemsHtml_(request) {
   var html = '<table class="data-table"><thead><tr><th>Date</th><th>Category</th><th>Location</th><th>Amount</th><th>Description</th><th>Receipt</th></tr></thead><tbody>';
   request.lines.forEach(function (line) {
     var isTimesheet = line.Category === 'Timesheet';
-    html += '<tr class="line-detail-row" data-line-id="' + escapeHtml_(line.LineID) + '" tabindex="0" role="button">';
+    var excluded = isLineExcluded_(line);
+    html += '<tr class="line-detail-row' + (excluded ? ' line-excluded' : '') + '" data-line-id="' + escapeHtml_(line.LineID) + '" tabindex="0" role="button">';
     html += '<td data-label="Date">' + formatLineDateDisplay_(line) + '</td>';
     html += '<td data-label="Category">' + escapeHtml_(line.Category) + '</td>';
     html += '<td data-label="Location">' + (isTimesheet ? '<span class="muted">—</span>' : escapeHtml_(line.BaseLocation)) + '</td>';
-    html += '<td data-label="Amount">' + formatLineAmountDisplay_(line) + '</td>';
+    html += '<td data-label="Amount">' + formatLineAmountDisplay_(line) + (excluded ? '<br>' + buildExcludedTagHtml_(line) : '') + '</td>';
     html += '<td data-label="Description">' + (isTimesheet ? '<span class="muted">—</span>' : escapeHtml_(line.Description)) + '</td>';
     html += '<td data-label="Receipt">' + (line.ReceiptFileURL
       ? '<span class="link-inline">View</span>'
@@ -243,6 +256,8 @@ function buildLineItemsHtml_(request) {
 // options.isLineEditable(request) -> bool decides whether Amount is editable
 // (admin.js only; My Requests never passes it, so it stays view-only), and
 // options.onSaveAmount(request, line, newAmount) -> Promise performs the save.
+// options.onSetExclusion(request, line, excluded, reason) -> Promise marks the
+// line "Not included" / includes it again (admin.js only, same gate).
 function wireLineItemRows_(panel, request, options) {
   function computeLineOptions(line) {
     var editable = !!(options.isLineEditable && options.isLineEditable(request) && options.onSaveAmount);
@@ -250,6 +265,9 @@ function wireLineItemRows_(panel, request, options) {
       editable: editable,
       onSaveAmount: (editable && options.onSaveAmount)
         ? function (newAmount) { return options.onSaveAmount(request, line, newAmount); }
+        : null,
+      onSetExclusion: (editable && options.onSetExclusion)
+        ? function (excluded, reason) { return options.onSetExclusion(request, line, excluded, reason); }
         : null
     };
   }
@@ -674,6 +692,22 @@ function patchCachedLineAmount_(requestId, lineId, newAmount) {
     });
     req.TotalAmount = total;
   }
+}
+
+// Called right after setLineItemExclusion succeeds — same idea as
+// patchCachedLineAmount_, plus the exclusion columns.
+function patchCachedLineExclusion_(requestId, lineId, excluded, reason, actorName, amount) {
+  if (!requestLinesCsvCache || !requestsCsvCache) return;
+  var line = requestLinesCsvCache.filter(function (l) { return String(l.LineID) === String(lineId); })[0];
+  if (line) {
+    if (excluded) line.OriginalAmount = line.Amount;
+    line.Amount = amount;
+    line.Excluded = excluded ? 'TRUE' : '';
+    line.ExcludedReason = excluded ? reason : '';
+    line.ExcludedBy = excluded ? actorName : '';
+    if (!excluded) line.OriginalAmount = '';
+  }
+  patchCachedLineAmount_(requestId, lineId, amount);
 }
 
 // Called right after submitLiquidationRequest succeeds — inserts a synthetic
@@ -1163,6 +1197,7 @@ function openLineItemPreviewWithNav_(lines, index, computeLineOptionsFn) {
   opts.onNext = index < lines.length - 1
     ? function () { openLineItemPreviewWithNav_(lines, index + 1, computeLineOptionsFn); }
     : null;
+  opts.reopen = function () { openLineItemPreviewWithNav_(lines, index, computeLineOptionsFn); };
   openLineItemPreview_(line, opts);
 }
 
@@ -1214,7 +1249,32 @@ function openLineItemPreview_(line, options) {
   }
 
   var isTimesheet = line.Category === 'Timesheet';
-  var editableNow = options.editable && !isTimesheet;
+  var excluded = isLineExcluded_(line);
+  var canSetExclusion = options.editable && !isTimesheet && !!options.onSetExclusion;
+  // An excluded line's Amount is locked at 0 — it has to be included again first.
+  var editableNow = options.editable && !isTimesheet && !excluded;
+
+  var excludedRowHtml = excluded
+    ? '<div class="receipt-modal-row"><span class="rm-label">Status</span><span class="rm-value">' +
+      buildExcludedTagHtml_(line) +
+      (line.ExcludedBy ? '<br><span class="muted">Marked by ' + escapeHtml_(line.ExcludedBy) + '</span>' : '') +
+      '</span></div>'
+    : '';
+
+  var exclusionControlsHtml = '';
+  if (canSetExclusion && !excluded) {
+    exclusionControlsHtml =
+      '<div class="receipt-modal-exclude">' +
+      '<label class="rm-label" for="receipt-modal-exclude-reason">Not part of expenses?</label>' +
+      '<input type="text" id="receipt-modal-exclude-reason" class="receipt-modal-exclude-reason" placeholder="Reason (required)" maxlength="300">' +
+      '<button type="button" class="btn btn-danger btn-small receipt-modal-exclude-btn" disabled>Mark as Not included</button>' +
+      '</div>';
+  } else if (canSetExclusion && excluded) {
+    exclusionControlsHtml =
+      '<div class="receipt-modal-exclude">' +
+      '<button type="button" class="btn btn-secondary btn-small receipt-modal-include-btn">Include again</button>' +
+      '</div>';
+  }
 
   var amountHtml = editableNow
     ? '<div class="receipt-modal-amount-edit">' +
@@ -1236,8 +1296,54 @@ function openLineItemPreview_(line, options) {
       '<div class="receipt-modal-row"><span class="rm-label">Location</span><span class="rm-value">' + escapeHtml_(line.BaseLocation) + '</span></div>' +
       '<div class="receipt-modal-row"><span class="rm-label">Description</span><span class="rm-value">' + escapeHtml_(line.Description) + '</span></div>') +
     '<div class="receipt-modal-row"><span class="rm-label">Amount</span><span class="rm-value">' + amountHtml + '</span></div>' +
+    excludedRowHtml +
     gpsRowHtml +
+    exclusionControlsHtml +
     '<div class="msg msg-error hidden receipt-modal-error" role="alert"></div>';
+
+  if (canSetExclusion) {
+    var exclErrorEl = detailsPane.querySelector('.receipt-modal-error');
+    var excludeBtn = detailsPane.querySelector('.receipt-modal-exclude-btn');
+    var includeBtn = detailsPane.querySelector('.receipt-modal-include-btn');
+    var reasonInput = detailsPane.querySelector('.receipt-modal-exclude-reason');
+
+    var runExclusion = function (btn, wantExcluded, reason, idleLabel) {
+      clearMessage(exclErrorEl);
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      options.onSetExclusion(wantExcluded, reason)
+        .then(function (result) {
+          // Mutate the shared line object in place so Prev/Next and the
+          // reopened view both see the new state.
+          line.Amount = result.amount;
+          line.Excluded = wantExcluded ? 'TRUE' : '';
+          line.ExcludedReason = wantExcluded ? reason : '';
+          line.ExcludedBy = wantExcluded ? (result.actorName || '') : '';
+          if (options.reopen) options.reopen();
+        })
+        .catch(function (err) {
+          setMessage(exclErrorEl, err.message, true);
+          btn.disabled = false;
+          btn.textContent = idleLabel;
+        });
+    };
+
+    if (excludeBtn) {
+      reasonInput.addEventListener('input', function () {
+        excludeBtn.disabled = !reasonInput.value.trim();
+      });
+      excludeBtn.addEventListener('click', function () {
+        var reason = reasonInput.value.trim();
+        if (!reason) return;
+        runExclusion(excludeBtn, true, reason, 'Mark as Not included');
+      });
+    }
+    if (includeBtn) {
+      includeBtn.addEventListener('click', function () {
+        runExclusion(includeBtn, false, '', 'Include again');
+      });
+    }
+  }
 
   if (editableNow) {
     var input = detailsPane.querySelector('.receipt-modal-amount-input');

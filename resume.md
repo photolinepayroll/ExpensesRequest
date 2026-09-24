@@ -937,6 +937,35 @@ for the exact done/not-done breakdown, summarized here:**
       searching by Bio ID, and "Clear filters" resetting both tabs correctly all still
       need a manual pass.
 
+36. Same day, new ask: Approver/Reviewer/Verifier need to flag a single attachment on a
+    request as **not part of the expenses** — amount automatically 0, with a remarks
+    reason. Confirmed via clarifying questions: "Include again" allowed (restores the
+    original amount), reason required, employee sees the "Not included" tag + reason in
+    My Requests, and Export CSV/Print Preview keep the line labeled "Not included"
+    (not dropped).
+    - **Backend** (`RequestService.gs`, `Code.gs`, `Setup.gs`): new POST action
+      `setLineItemExclusion(requestId, lineId, excluded, reason, userId, password)`.
+      `updateLineItemAmount`'s guard chain (credentials → role for current status →
+      Pending routing BiometricID check → line belongs to request) was extracted
+      unchanged into `authorizeLineEdit_`, and its re-sum + Remarks append into
+      `recomputeRequestTotalAndAppendRemark_`; both actions use them. Exclude saves
+      `OriginalAmount`, sets `Amount=0`, `Excluded=TRUE`, `ExcludedReason`, `ExcludedBy`;
+      include-again restores and clears. `updateLineItemAmount` now refuses an excluded
+      line. Timesheet lines can't be excluded. Four new `RequestLines` columns added to
+      `setupSheets()`'s header list.
+    - **Frontend** (`common.js`, `admin.js`, `styles.css`): `isLineExcluded_`, a
+      "Not included" badge + reason in the shared line-items table (so the employee sees
+      it too) with a struck-through amount, modal controls ("Mark as Not included" with
+      required reason / "Include again") shown under the same gate as Save Amount,
+      `patchCachedLineExclusion_` for instant UI update, `setLineItemExclusion_` in
+      `admin.js`, `Excluded`/`ExcludedReason` CSV columns, Print Preview caption suffix.
+    - **Verified**: `node --check` on all touched files; Node simulation of the real
+      `RequestService.gs` against an in-memory sheet + of the cache patch — all
+      assertions passed. Deployed `@39`; live `curl` returned the expected
+      bad-credentials JSON.
+    - **Not yet done**: user must re-run `setupSheets()` in the Apps Script editor to
+      create the four columns. Not yet checked in a real browser.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

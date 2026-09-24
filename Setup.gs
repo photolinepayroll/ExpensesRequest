@@ -23,7 +23,8 @@ function setupSheets() {
 
   createOrMigrateSheet_(ss, SHEET_REQUEST_LINES,
     ['LineID', 'RequestID', 'Date', 'Category', 'BaseLocation', 'Amount',
-     'Description', 'ReceiptFileURL', 'GpsMapLink', 'CutoffEndDate']);
+     'Description', 'ReceiptFileURL', 'GpsMapLink', 'CutoffEndDate',
+     'Excluded', 'ExcludedReason', 'ExcludedBy', 'OriginalAmount']);
 
   createOrMigrateSheet_(ss, SHEET_APPROVERS,
     ['UserID', 'Password', 'FullName', 'Role', 'Active', 'BiometricID']);

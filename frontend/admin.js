@@ -271,6 +271,7 @@ function loadAdminRequests() {
         onSelectionChange: bulkEligible ? queueBulkController_.updateSelection : undefined,
         isLineEditable: isLineEditableForCurrentApprover_,
         onSaveAmount: saveLineItemAmount_,
+        onSetExclusion: setLineItemExclusion_,
         onDetailRendered: adminOnDetailRendered_
       });
     })
@@ -373,6 +374,7 @@ function loadAdminHistory() {
         },
         isLineEditable: isLineEditableForCurrentApprover_,
         onSaveAmount: saveLineItemAmount_,
+        onSetExclusion: setLineItemExclusion_,
         onDetailRendered: adminOnDetailRendered_
       });
     })
@@ -426,6 +428,25 @@ function saveLineItemAmount_(request, line, newAmount) {
       }
       patchCachedLineAmount_(request.RequestID, line.LineID, newAmount);
       refreshAdminActiveTab_(); // refreshes the Total column + audit trail for this request
+      return result;
+    });
+}
+
+// Called from the shared receipt/detail modal's "Mark as Not included" /
+// "Include again" buttons. Same password gate + cache-patch + refresh flow
+// as saveLineItemAmount_; the server re-checks role/turn/routing itself.
+function setLineItemExclusion_(request, line, excluded, reason) {
+  if (!ensureApproverPassword_()) {
+    return Promise.reject(new Error('Password required to save.'));
+  }
+  return runServer('setLineItemExclusion', request.RequestID, line.LineID, excluded, reason, currentApprover.userId, currentApprover.password)
+    .then(function (result) {
+      if (!result.success) {
+        currentApprover.password = null; // can't tell if the password was the problem — re-prompt next time
+        throw new Error(result.error);
+      }
+      patchCachedLineExclusion_(request.RequestID, line.LineID, excluded, reason, result.actorName || currentApprover.fullName, result.amount);
+      refreshAdminActiveTab_();
       return result;
     });
 }
@@ -641,7 +662,8 @@ var EXPORT_CSV_HEADERS = [
   'RequestID', 'EmployeeID', 'EmployeeName', 'Status', 'SubmittedDate',
   'ApprovedBy', 'ApprovedDate', 'ReviewedBy', 'ReviewedDate',
   'AuthorizedBy', 'AuthorizedDate', 'CreditingDate',
-  'LineDate', 'CutoffEndDate', 'Category', 'Amount', 'BaseLocation', 'ReceiptURL', 'Remarks'
+  'LineDate', 'CutoffEndDate', 'Category', 'Amount', 'Excluded', 'ExcludedReason',
+  'BaseLocation', 'ReceiptURL', 'Remarks'
 ];
 
 // One row per line item (not per request) — a request with 3 lines produces
@@ -655,7 +677,9 @@ function buildExportCsv_(requests) {
         req.RequestID, req.EmployeeID, req.EmployeeName, statusLabel, req.DateSubmitted,
         req.ApprovedBy, req.ApprovedDate, req.ReviewedBy, req.ReviewedDate,
         req.AuthorizedBy, req.AuthorizedDate, req.CreditingDate,
-        line.Date, line.CutoffEndDate || '', line.Category, line.Amount, line.BaseLocation, line.ReceiptFileURL, req.Remarks
+        line.Date, line.CutoffEndDate || '', line.Category, line.Amount,
+        isLineExcluded_(line) ? 'Not included' : '', isLineExcluded_(line) ? (line.ExcludedReason || '') : '',
+        line.BaseLocation, line.ReceiptFileURL, req.Remarks
       ].map(csvField_).join(','));
     });
   });
@@ -790,7 +814,8 @@ function buildExportReportHtml_(requests) {
         if (req.Status === 'Rejected' && req.RejectedBy) approverParts.push('Rejected by ' + req.RejectedBy);
         var item = {
           caption: req.RequestID + ' — ' + req.EmployeeName + ' — ' +
-            formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption,
+            formatLineDateDisplay_(line) + ' — ' + line.Category + amountCaption +
+            (isLineExcluded_(line) ? ' · NOT INCLUDED — ' + (line.ExcludedReason || '') : ''),
           approvers: approverParts.join(' · '),
           url: driveThumbnailUrl_(line.ReceiptFileURL)
         };

@@ -408,68 +408,24 @@ function updateLineItemAmount(requestId, lineId, newAmount, userId, password, re
   }
 
   try {
-    var requestRowIndex = findRowIndexById_(SHEET_REQUESTS, 'RequestID', requestId);
-    if (requestRowIndex === -1) {
-      return { success: false, error: 'Request not found.' };
+    var ctx = authorizeLineEdit_(requestId, lineId, approverResult);
+    if (ctx.error) {
+      return { success: false, error: ctx.error };
     }
 
-    var requestSheet = getSheet_(SHEET_REQUESTS);
-    var requestHeaderMap = getHeaderMap_(requestSheet);
-    var currentStatus = requestSheet.getRange(requestRowIndex, requestHeaderMap['Status'] + 1).getValue();
-
-    var requiredRole = REQUIRED_ROLE_BY_STATUS[currentStatus];
-    if (!requiredRole) {
-      return { success: false, error: 'This request can no longer be edited.' };
-    }
-    if (approverResult.role !== requiredRole) {
-      return { success: false, error: 'This action requires the ' + requiredRole + ' role.' };
+    if (ctx.lineHeaderMap['Excluded'] !== undefined &&
+        isLineExcludedValue_(ctx.lineSheet.getRange(ctx.lineRowIndex, ctx.lineHeaderMap['Excluded'] + 1).getValue())) {
+      return { success: false, error: 'Include this line again before editing its amount.' };
     }
 
-    // Same category/store routing check advanceRequestStage performs for the
-    // Pending stage — only the specific required Approver can edit amounts
-    // on a Pending request, not just any Approver-role account.
-    if (currentStatus === STATUS_PENDING) {
-      var employeeId = requestSheet.getRange(requestRowIndex, requestHeaderMap['EmployeeID'] + 1).getValue();
-      var employeeInfo = getEmployeeRoutingInfo_(employeeId);
-      var lineLocation = getFirstLineBaseLocation_(requestId);
-      var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
-      if (required.found) {
-        var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
-        var requiredBioId = String(required.bioId || '').trim().toLowerCase();
-        if (!approverBioId || approverBioId !== requiredBioId) {
-          return { success: false, error: 'Only ' + required.name + ' can edit amounts on this request.' };
-        }
-      }
-    }
+    var oldAmount = Number(ctx.lineSheet.getRange(ctx.lineRowIndex, ctx.lineHeaderMap['Amount'] + 1).getValue()) || 0;
+    var category = ctx.lineSheet.getRange(ctx.lineRowIndex, ctx.lineHeaderMap['Category'] + 1).getValue();
 
-    var lineRowIndex = findRowIndexById_(SHEET_REQUEST_LINES, 'LineID', lineId);
-    if (lineRowIndex === -1) {
-      return { success: false, error: 'Line item not found.' };
-    }
+    updateRowFields_(SHEET_REQUEST_LINES, ctx.lineRowIndex, { Amount: amount });
 
-    var lineSheet = getSheet_(SHEET_REQUEST_LINES);
-    var lineHeaderMap = getHeaderMap_(lineSheet);
-    var lineRequestId = lineSheet.getRange(lineRowIndex, lineHeaderMap['RequestID'] + 1).getValue();
-    if (String(lineRequestId) !== String(requestId)) {
-      return { success: false, error: 'Line item not found.' };
-    }
-
-    var oldAmount = Number(lineSheet.getRange(lineRowIndex, lineHeaderMap['Amount'] + 1).getValue()) || 0;
-    var category = lineSheet.getRange(lineRowIndex, lineHeaderMap['Category'] + 1).getValue();
-
-    updateRowFields_(SHEET_REQUEST_LINES, lineRowIndex, { Amount: amount });
-
-    var allLines = getAllRowsAsObjects_(SHEET_REQUEST_LINES).filter(function (line) {
-      return String(line.RequestID) === String(requestId);
-    });
-    var newTotal = allLines.reduce(function (sum, line) { return sum + (Number(line.Amount) || 0); }, 0);
-
-    var existingRemarks = requestSheet.getRange(requestRowIndex, requestHeaderMap['Remarks'] + 1).getValue();
     var remarkLine = 'Amount edited by ' + actorName + ': ' + oldAmount.toFixed(2) + ' → ' + amount.toFixed(2) +
       ' (' + category + ' line)' + (remark ? ' — ' + remark : '');
-    var updatedRemarks = existingRemarks ? existingRemarks + '\n' + remarkLine : remarkLine;
-
-    updateRowFields_(SHEET_REQUESTS, requestRowIndex, { TotalAmount: newTotal, Remarks: updatedRemarks });
+    var newTotal = recomputeRequestTotalAndAppendRemark_(requestId, ctx, remarkLine);
 
     return { success: true, newAmount: amount, newTotalAmount: newTotal };
   } catch (e) {
@@ -477,4 +433,176 @@ function updateLineItemAmount(requestId, lineId, newAmount, userId, password, re
   } finally {
     lock.releaseLock();
   }
+}
+
+// Marks a single line item "Not included" (Amount forced to 0, reason
+// required) or includes it again (original Amount restored) — for an
+// attachment the Approver/Reviewer/Verifier judges isn't a valid expense,
+// without rejecting the whole request. Same authorization as
+// updateLineItemAmount (via authorizeLineEdit_), same lock, same
+// re-sum-from-scratch TotalAmount + appended Remarks audit line.
+function setLineItemExclusion(requestId, lineId, excluded, reason, userId, password) {
+  var approverResult = getApproverByCredentials_(userId, password);
+  if (!approverResult.found) {
+    return { success: false, error: approverResult.error };
+  }
+  var actorName = approverResult.fullName;
+
+  var wantExcluded = (excluded === true || String(excluded).toLowerCase() === 'true');
+  var trimmedReason = String(reason || '').trim();
+  if (wantExcluded && !trimmedReason) {
+    return { success: false, error: 'A reason is required to mark a line as Not included.' };
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (e) {
+    return { success: false, error: 'System is busy, please try again.' };
+  }
+
+  try {
+    var ctx = authorizeLineEdit_(requestId, lineId, approverResult);
+    if (ctx.error) {
+      return { success: false, error: ctx.error };
+    }
+
+    var lineSheet = ctx.lineSheet;
+    var lineHeaderMap = ctx.lineHeaderMap;
+    if (lineHeaderMap['Excluded'] === undefined || lineHeaderMap['OriginalAmount'] === undefined) {
+      return { success: false, error: 'RequestLines sheet is missing the exclusion columns — re-run setupSheets().' };
+    }
+
+    function cell(name) {
+      return lineSheet.getRange(ctx.lineRowIndex, lineHeaderMap[name] + 1).getValue();
+    }
+
+    var category = cell('Category');
+    if (category === 'Timesheet') {
+      return { success: false, error: "Timesheet lines can't be excluded." };
+    }
+
+    var currentlyExcluded = isLineExcludedValue_(cell('Excluded'));
+    var remarkLine;
+    var amount;
+
+    if (wantExcluded) {
+      if (currentlyExcluded) {
+        return { success: false, error: 'This line is already marked Not included.' };
+      }
+      var oldAmount = Number(cell('Amount')) || 0;
+      amount = 0;
+      updateRowFields_(SHEET_REQUEST_LINES, ctx.lineRowIndex, {
+        OriginalAmount: oldAmount,
+        Amount: 0,
+        Excluded: 'TRUE',
+        ExcludedReason: trimmedReason,
+        ExcludedBy: actorName
+      });
+      remarkLine = 'Line marked Not included by ' + actorName + ': ' + oldAmount.toFixed(2) + ' → 0.00 (' +
+        category + ' line) — ' + trimmedReason;
+    } else {
+      if (!currentlyExcluded) {
+        return { success: false, error: 'This line is not marked Not included.' };
+      }
+      amount = Number(cell('OriginalAmount')) || 0;
+      updateRowFields_(SHEET_REQUEST_LINES, ctx.lineRowIndex, {
+        Amount: amount,
+        Excluded: '',
+        ExcludedReason: '',
+        ExcludedBy: '',
+        OriginalAmount: ''
+      });
+      remarkLine = 'Line included again by ' + actorName + ': 0.00 → ' + amount.toFixed(2) + ' (' + category + ' line)';
+    }
+
+    var newTotal = recomputeRequestTotalAndAppendRemark_(requestId, ctx, remarkLine);
+
+    return { success: true, amount: amount, newTotalAmount: newTotal, actorName: actorName };
+  } catch (e) {
+    return { success: false, error: 'Update failed: ' + e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// A Sheets checkbox/boolean reads back as a real boolean, a typed value as
+// the string "TRUE" — accept both.
+function isLineExcludedValue_(value) {
+  return value === true || String(value).toUpperCase() === 'TRUE';
+}
+
+// Shared guard for every per-line mutation (updateLineItemAmount,
+// setLineItemExclusion). Must be called while holding the script lock.
+// Returns { error } or the resolved sheet/row context.
+function authorizeLineEdit_(requestId, lineId, approverResult) {
+  var requestRowIndex = findRowIndexById_(SHEET_REQUESTS, 'RequestID', requestId);
+  if (requestRowIndex === -1) {
+    return { error: 'Request not found.' };
+  }
+
+  var requestSheet = getSheet_(SHEET_REQUESTS);
+  var requestHeaderMap = getHeaderMap_(requestSheet);
+  var currentStatus = requestSheet.getRange(requestRowIndex, requestHeaderMap['Status'] + 1).getValue();
+
+  var requiredRole = REQUIRED_ROLE_BY_STATUS[currentStatus];
+  if (!requiredRole) {
+    return { error: 'This request can no longer be edited.' };
+  }
+  if (approverResult.role !== requiredRole) {
+    return { error: 'This action requires the ' + requiredRole + ' role.' };
+  }
+
+  // Same category/store routing check advanceRequestStage performs for the
+  // Pending stage — only the specific required Approver can edit line items
+  // on a Pending request, not just any Approver-role account.
+  if (currentStatus === STATUS_PENDING) {
+    var employeeId = requestSheet.getRange(requestRowIndex, requestHeaderMap['EmployeeID'] + 1).getValue();
+    var employeeInfo = getEmployeeRoutingInfo_(employeeId);
+    var lineLocation = getFirstLineBaseLocation_(requestId);
+    var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
+    if (required.found) {
+      var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
+      var requiredBioId = String(required.bioId || '').trim().toLowerCase();
+      if (!approverBioId || approverBioId !== requiredBioId) {
+        return { error: 'Only ' + required.name + ' can edit line items on this request.' };
+      }
+    }
+  }
+
+  var lineRowIndex = findRowIndexById_(SHEET_REQUEST_LINES, 'LineID', lineId);
+  if (lineRowIndex === -1) {
+    return { error: 'Line item not found.' };
+  }
+
+  var lineSheet = getSheet_(SHEET_REQUEST_LINES);
+  var lineHeaderMap = getHeaderMap_(lineSheet);
+  var lineRequestId = lineSheet.getRange(lineRowIndex, lineHeaderMap['RequestID'] + 1).getValue();
+  if (String(lineRequestId) !== String(requestId)) {
+    return { error: 'Line item not found.' };
+  }
+
+  return {
+    requestSheet: requestSheet,
+    requestHeaderMap: requestHeaderMap,
+    requestRowIndex: requestRowIndex,
+    lineSheet: lineSheet,
+    lineHeaderMap: lineHeaderMap,
+    lineRowIndex: lineRowIndex
+  };
+}
+
+// Re-sums all of a request's lines from scratch (drift-safe, never a delta)
+// and appends one audit line to Remarks. Returns the new TotalAmount.
+function recomputeRequestTotalAndAppendRemark_(requestId, ctx, remarkLine) {
+  var allLines = getAllRowsAsObjects_(SHEET_REQUEST_LINES).filter(function (line) {
+    return String(line.RequestID) === String(requestId);
+  });
+  var newTotal = allLines.reduce(function (sum, line) { return sum + (Number(line.Amount) || 0); }, 0);
+
+  var existingRemarks = ctx.requestSheet.getRange(ctx.requestRowIndex, ctx.requestHeaderMap['Remarks'] + 1).getValue();
+  var updatedRemarks = existingRemarks ? existingRemarks + '\n' + remarkLine : remarkLine;
+
+  updateRowFields_(SHEET_REQUESTS, ctx.requestRowIndex, { TotalAmount: newTotal, Remarks: updatedRemarks });
+  return newTotal;
 }

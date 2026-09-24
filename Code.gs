@@ -15,6 +15,7 @@ var API_ACTIONS = {
   submitLiquidationRequest: submitLiquidationRequest,
   advanceRequestStage: advanceRequestStage,
   updateLineItemAmount: updateLineItemAmount,
+  setLineItemExclusion: setLineItemExclusion,
   loginApprover: loginApprover,
   searchEmployeesForUtility: searchEmployeesForUtility,
   saveMealAllowanceRecord: saveMealAllowanceRecord,
