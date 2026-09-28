@@ -74,7 +74,9 @@ backend push/deploy needed. Item 16 (duplicate-submission fix) is also deployed 
 `clasp deploy -i` was run against the same deployment, now `@38`. Item 17 (Name/Bio ID
 search filter) is also 100% frontend — no backend push/deploy needed. Item 18 (per-line
 "Not included" exclusion) is deployed live — `clasp deploy -i`, now `@39`; requires
-`setupSheets()` to be re-run once to add the four new `RequestLines` columns.
+`setupSheets()` to be re-run once to add the four new `RequestLines` columns. Item 37
+(content-based duplicate-submission fallback fix, a follow-up to item 16 — see below) is
+also deployed live — `clasp deploy -i`, now `@40`.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -621,6 +623,51 @@ search filter) is also 100% frontend — no backend push/deploy needed. Item 18 
       the frontend simply shows nothing excluded). **Not yet checked in a real
       browser**: the modal controls, the strike-through/tag rendering, employee view,
       and CSV/Print Preview output.
+
+37. **Content-based duplicate-submission fallback — follow-up to item 16.** User shared
+    screenshots of real duplicate rows (same employee/amount/day, different sequential
+    RequestIDs) still occurring after item 16's `clientRequestId` dedupe shipped. Traced
+    root cause: item 16 only collapses an *automatic* frontend retry of the same submit
+    click (same `clientRequestId`); these duplicates had **different** `clientRequestId`s,
+    meaning the user manually clicked Submit again after a "System is busy" failure — the
+    dedupe poll (`RequestService.gs`'s `submitLiquidationRequest`) only waits ~15s for a
+    same-ID retry before giving up, shorter than the original call's worst-case duration
+    (two 20s lock waits plus an unbounded Drive upload), and `frontend/employee.js`'s
+    `proceedWithSubmit_` re-enables Submit without clearing the still-filled-in form on
+    failure, inviting exactly that resubmit — which mints a fresh `clientRequestId` and
+    bypasses the cache entirely.
+    - `RequestService.gs` gained `findRecentDuplicateRequest_`/`buildLineSignature_`/
+      `buildLineSignatureKey_`: at the start of Phase 3 (already inside the shared
+      `lock2`), looks for an existing **Pending** request from the same `EmployeeID`
+      submitted within `DUPLICATE_SUBMIT_WINDOW_MS_` (3 minutes) whose lines match
+      (Date/Category/BaseLocation/Amount/Description, order-independent) — if found, skips
+      the append and returns the existing request's ID as success instead, same shape as a
+      `clientRequestId` cache hit but triggered by content, so it catches a manual resubmit
+      regardless of what ID it carries. Running under the shared lock also makes two
+      near-simultaneous duplicate attempts resolve safely (first to the lock writes the
+      real row, the other coalesces into it — that call's own Drive upload, if any, is
+      orphaned, the same accepted Phase 2/3 tradeoff already documented above).
+      `SUBMIT_DEDUPE_POLL_ATTEMPTS_` also raised `10` → `20` (~15s → ~30s), cheap and
+      independent of the fix above.
+    - `frontend/employee.js`'s `proceedWithSubmit_` shows a tailored message for a
+      busy-retry failure ("Your submission may still be processing — please check My
+      Requests before submitting again.") instead of the bare "System is busy" text, to
+      discourage an uninformed resubmit — though the backend fix above is the real
+      safety net regardless.
+    - **Verified**: `node --check` on `frontend/employee.js`; a standalone Node simulation
+      of the signature/duplicate-matching logic against synthetic data (30s-old duplicate
+      detected, 5-minute-old match ignored as outside the window, different-employee match
+      ignored, one-differing-line match ignored, non-Pending match ignored, multi-line
+      order-independent matching) — all 6 assertions passed. `clasp push -f` +
+      `clasp deploy -i` → `@40`; live `curl` POST smoke test (deliberately-invalid Employee
+      ID, following the documented 302→echo-URL redirect) confirmed the deployment runs and
+      correctly rejects at the employee-lookup guard, before ever reaching the new dedupe
+      code — nothing written to the live Sheet.
+    - **Not yet done, by explicit choice** (same reasoning as item 16): no real end-to-end
+      live test (two genuine manual submissions of identical data within the 3-minute
+      window) was run against production data, to avoid writing test rows into the live
+      Sheet/Drive — whether this actually eliminates the reported duplicate clusters isn't
+      directly observed yet, only reasoned through from the traced root cause.
 
 9. **Mobile "Failed to fetch" resilience, Approver queue routing-scope widened to every status,
    and approver names added to Print Preview receipt captions.** All 100% frontend

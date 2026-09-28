@@ -660,7 +660,16 @@ function proceedWithSubmit_(errorEl, successEl) {
     .then(function (result) {
       resetSubmitButton();
       if (!result.success) {
-        setMessage(errorEl, result.error, true);
+        // A "busy" failure means the server gave up waiting for a slow
+        // original submission — it may still be processing. The backend now
+        // also has a content-based fallback that coalesces a resubmit of the
+        // same data into the original request, but that only helps once the
+        // resubmit actually happens; steer the user to check first rather
+        // than implying a bare retry is the only option.
+        var message = /busy/i.test(result.error || '')
+          ? 'Your submission may still be processing — please check My Requests before submitting again.'
+          : result.error;
+        setMessage(errorEl, message, true);
         return;
       }
       setMessage(successEl, 'Request ' + result.requestId + ' submitted successfully.', false);

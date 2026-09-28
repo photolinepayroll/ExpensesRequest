@@ -966,6 +966,62 @@ for the exact done/not-done breakdown, summarized here:**
     - **Not yet done**: user must re-run `setupSheets()` in the Apps Script editor to
       create the four columns. Not yet checked in a real browser.
 
+37. New session, the user shared screenshots of real duplicate rows (`REQ#000203/204/205`,
+    `REQ#000201/202` — same employee, same amount, same day, but different sequential
+    RequestIDs) and asked to fix it, following up on item 16/34's idempotency fix. Traced
+    the real root cause (not guessed) via a `/code-review` on the reported symptom: item
+    16's `clientRequestId` dedupe only collapses an *automatic* frontend retry of the same
+    submit click — these duplicates carried **different** RequestIDs, meaning the server
+    saw genuinely distinct `clientRequestId`s, i.e. separate manual Submit clicks. Chain:
+    `submitLiquidationRequest` can legitimately run long under load (two 20s lock waits
+    plus an unbounded Phase 2 Drive upload); a same-`clientRequestId` retry only polls the
+    dedupe cache for ~15s before giving up and returning `{success:false, error:'System is
+    busy, please try again.'}`; `frontend/common.js`'s `fetchJsonWithRetry_` already
+    silently retries that up to 4x (~1 more minute), but once exhausted the error reaches
+    `frontend/employee.js`'s `proceedWithSubmit_`, which re-enables the Submit button
+    without clearing the still-filled-in form; the user, seeing the form untouched, clicks
+    Submit again — which mints a **brand-new** `clientRequestId`, completely bypassing the
+    cache, and appends a real second row.
+    - **Content-based fallback dedupe (the actual fix)**: `RequestService.gs` gained
+      `findRecentDuplicateRequest_(employeeId, lineRows)` + `buildLineSignature_`/
+      `buildLineSignatureKey_`, called at the very start of Phase 3 (already inside
+      `lock2`, so it's serialized against every other concurrent submit the same way the
+      rest of the app already is) — looks for an existing **Pending** request from the
+      same `EmployeeID`, submitted within `DUPLICATE_SUBMIT_WINDOW_MS_` (3 minutes), whose
+      line items match (Date/Category/BaseLocation/Amount/Description, order-independent).
+      If found, the append is skipped entirely and the existing request's ID is returned as
+      a normal success — same shape as a cache hit, just discovered by content instead of
+      by `clientRequestId`, so it catches a genuine manual resubmit regardless of what ID it
+      carries. Because it runs under the shared lock, two near-simultaneous duplicate
+      attempts still resolve safely: whichever wins the lock first writes the real row, the
+      other finds it and coalesces (its own Drive upload, if any, is orphaned — the same
+      accepted tradeoff already documented for Phase 2/3 failures).
+    - **Modest poll-window increase**: `SUBMIT_DEDUPE_POLL_ATTEMPTS_` raised from `10` to
+      `20` (~15s → ~30s), giving a same-`clientRequestId` retry more room to catch a slow
+      original call finishing before falling back to the content-based check above.
+    - **Frontend message tweak**: `proceedWithSubmit_` now shows "Your submission may still
+      be processing — please check My Requests before submitting again." specifically for a
+      busy-retry failure (matched via the same `/busy/i` pattern `common.js` already uses),
+      instead of the bare "System is busy, please try again." — steers the user away from
+      an uninformed resubmit, though the content-based check above is now the real safety
+      net regardless of what the user does next.
+    - **Verified**: `node --check` on `frontend/employee.js`; a standalone Node simulation
+      of `buildLineSignature_`/`findRecentDuplicateRequest_`'s logic against synthetic data
+      (duplicate submitted 30s ago is detected; one 5 minutes ago is not, outside the
+      window; a different employee with an identical signature is not; a recent request
+      with one differing line is not; a non-Pending/Authorized match is ignored;
+      multi-line requests match regardless of line order) — all 6 assertions passed.
+      `clasp push -f` + `clasp deploy -i` → live at `@40`; live `curl` smoke test (POST
+      with a deliberately-invalid Employee ID, following the documented 302→echo-URL dance)
+      confirmed the deployment runs and correctly rejects at the employee-lookup guard
+      before ever reaching the new dedupe logic, so nothing was written to the live Sheet.
+    - **Not yet done, by explicit choice** (same reasoning as item 16): a true end-to-end
+      live test — two genuinely separate manual submissions of identical data within the
+      3-minute window, confirming only one real row results — was not run against
+      production data, to avoid writing test rows into the live Sheet/Drive. Whether this
+      actually eliminates the duplicate clusters reported in the screenshots has not been
+      directly observed yet, only reasoned through from the traced root cause.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

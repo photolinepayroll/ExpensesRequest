@@ -23,7 +23,74 @@ var SUBMIT_DEDUPE_IN_PROGRESS_ = 'IN_PROGRESS';
 var SUBMIT_DEDUPE_RESULT_TTL_SECONDS_ = 3600; // 1 hour — comfortably covers any retry storm
 var SUBMIT_DEDUPE_MARKER_TTL_SECONDS_ = 21600; // CacheService's max (6h)
 var SUBMIT_DEDUPE_POLL_INTERVAL_MS_ = 1500;
-var SUBMIT_DEDUPE_POLL_ATTEMPTS_ = 10; // ~15s total
+var SUBMIT_DEDUPE_POLL_ATTEMPTS_ = 20; // ~30s total — gives a same-clientRequestId retry more
+                                        // room to catch a slow original call finishing, before
+                                        // falling back to the content-based check below
+
+// A same-clientRequestId retry only catches an automatic frontend retry of
+// the *same* submit click. A user manually clicking Submit again after
+// seeing "System is busy" (form still filled in, see frontend/employee.js's
+// proceedWithSubmit_) mints a brand-new clientRequestId, which bypasses the
+// cache above entirely. This second, content-based check is the real
+// safety net: right before writing (Phase 3, under lock2, so it's
+// serialized against every other concurrent submit the same way the rest of
+// this app already is), look for an existing Pending request from the same
+// employee, submitted recently, whose lines match — and coalesce into it
+// instead of appending a duplicate row. See findRecentDuplicateRequest_.
+var DUPLICATE_SUBMIT_WINDOW_MS_ = 180000; // 3 minutes
+
+/** Normalizes one line's comparable fields into a single string key, insensitive to
+ * whether Date arrives as a Sheet-read Date object or a payload date string. */
+function buildLineSignatureKey_(line) {
+  var dateValue = line.Date || line.date;
+  var dateKey = (dateValue instanceof Date)
+    ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+    : String(dateValue || '').trim();
+  var amount = Number(line.Amount != null ? line.Amount : line.amount);
+  return [
+    dateKey,
+    String(line.Category || line.category || '').trim(),
+    String(line.BaseLocation || line.baseLocation || '').trim(),
+    amount.toFixed(2),
+    String(line.Description || line.description || '').trim()
+  ].join('|');
+}
+
+/** Order-independent signature for a whole request's line items. */
+function buildLineSignature_(lines) {
+  return lines.map(buildLineSignatureKey_).sort().join(';;');
+}
+
+/**
+ * Content-based fallback dedupe: catches a genuine manual resubmit (a fresh
+ * clientRequestId, so the CacheService check above never sees it) by looking
+ * for an existing Pending request from the same employee, submitted within
+ * DUPLICATE_SUBMIT_WINDOW_MS_, whose line items match. Returns the existing
+ * RequestID, or null if no match is found.
+ */
+function findRecentDuplicateRequest_(employeeId, lineRows) {
+  var incomingSignature = buildLineSignature_(lineRows);
+  var now = new Date().getTime();
+
+  var candidateRequests = getAllRowsAsObjects_(SHEET_REQUESTS).filter(function (req) {
+    if (String(req.EmployeeID) !== String(employeeId)) return false;
+    if (req.Status !== STATUS_PENDING) return false;
+    var submitted = req.DateSubmitted instanceof Date ? req.DateSubmitted.getTime() : new Date(req.DateSubmitted).getTime();
+    return (now - submitted) >= 0 && (now - submitted) <= DUPLICATE_SUBMIT_WINDOW_MS_;
+  });
+  if (!candidateRequests.length) return null;
+
+  var allLines = getAllRowsAsObjects_(SHEET_REQUEST_LINES);
+  for (var i = 0; i < candidateRequests.length; i++) {
+    var candidateId = candidateRequests[i].RequestID;
+    var candidateLines = allLines.filter(function (l) { return l.RequestID === candidateId; });
+    if (candidateLines.length !== lineRows.length) continue;
+    if (buildLineSignature_(candidateLines) === incomingSignature) {
+      return candidateId;
+    }
+  }
+  return null;
+}
 
 function getSubmitDedupeResult_(cache, key) {
   var cached = cache.get(key);
@@ -149,6 +216,19 @@ function submitLiquidationRequest(payload) {
   }
 
   try {
+    // Content-based fallback dedupe — catches a manual resubmit that arrives
+    // with a fresh clientRequestId (see the comment above
+    // DUPLICATE_SUBMIT_WINDOW_MS_). Runs under this same lock, so it's safe
+    // against a near-simultaneous duplicate attempt too: whichever call
+    // reaches this point first writes the real row, and the other finds it
+    // here and coalesces instead of appending a second one.
+    var duplicateRequestId = findRecentDuplicateRequest_(employee.EmployeeID, lineRows);
+    if (duplicateRequestId) {
+      var duplicateResult = { success: true, requestId: duplicateRequestId };
+      if (dedupeKey) cache.put(dedupeKey, JSON.stringify(duplicateResult), SUBMIT_DEDUPE_RESULT_TTL_SECONDS_);
+      return duplicateResult;
+    }
+
     lineRows.forEach(function (row) {
       appendRowFromObject_(SHEET_REQUEST_LINES, row);
     });
