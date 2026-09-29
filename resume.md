@@ -1022,6 +1022,63 @@ for the exact done/not-done breakdown, summarized here:**
       actually eliminates the duplicate clusters reported in the screenshots has not been
       directly observed yet, only reasoned through from the traced root cause.
 
+38. Same-day follow-up: the user shared screenshots of two *new* duplicate clusters —
+    `REQ#000225/227` (Genita Reyes) — asking again what the real cause was. Rather than
+    guessing, pulled the live `REQUESTS_CSV_URL`/`REQUEST_LINES_CSV_URL` CSVs directly via
+    `curl` to get real timestamps and real line-item content instead of trusting the
+    screenshots alone. Found two distinct situations bundled in what looked like one
+    recurrence:
+    - `REQ#000203/204/205` (Patani) all predate item 37's Sep 29 1:20 AM deploy —
+      expected, already-documented pre-fix gap, not a new bug.
+    - `REQ#000225/227` (Genita) — submitted **171 seconds apart**, inside item 37's
+      3-minute dedupe window, and diffing the two requests' 11 line items in the
+      `RequestLines` CSV confirmed they're byte-identical (Date/Category/BaseLocation/
+      Amount/Description all match, only `ReceiptFileURL` differs, as expected from two
+      separate Drive uploads) — happened **after** item 37's fix was live. A genuine gap
+      in the deployed fix, not a repeat of the old known issue.
+    - **Root cause, found by reading the deployed code against the real timing**:
+      `submitLiquidationRequest`'s Phase 2 captures `now = new Date()` *before* running
+      Drive uploads (that's what becomes `DateSubmitted`). But `findRecentDuplicateRequest_`
+      computed a **fresh** `new Date().getTime()` at check-time, inside Phase 3 — i.e.
+      *after* the current (second) submission's own Drive uploads had already run. For an
+      11-receipt submission, that upload delay alone can add tens of seconds, so by the
+      time the check actually executed, real elapsed time since the first request's
+      `DateSubmitted` had already crept past 180s, even though the two requests' own
+      recorded `DateSubmitted` values were only 171s apart. The window was effectively
+      shrunk by however long the second submission's own upload took — exactly the
+      scenario (many receipt photos) most likely to produce a slow original that
+      provokes a manual resubmit in the first place.
+    - **Fix** (`RequestService.gs`): `findRecentDuplicateRequest_` now takes an explicit
+      `referenceTimeMs` param instead of computing its own timestamp; the call site
+      passes `now.getTime()` (the same Phase-2-start value already captured before
+      uploads) — anchoring the window to "how long ago did the user actually click
+      Submit," not "how long ago did the check happen to run." Also widened
+      `DUPLICATE_SUBMIT_WINDOW_MS_` from 3 to 5 minutes for extra headroom, confirmed
+      with the user beforehand (options offered: 5 min / 10 min / keep 3 min +
+      anchoring-only).
+    - **Verified**: syntax-checked via `new Function(src)`; a standalone Node harness
+      (stubs `getAllRowsAsObjects_`/`Utilities`/`Session`, loads only the
+      constants+helpers portion of `RequestService.gs` into a `vm` context — same
+      approach as prior sessions' simulations) reproduced the **exact live Genita
+      scenario** (171s apart + simulated upload delay) and confirmed the fix catches it;
+      plus 7 more assertions (5-min window boundary at 299s/301s, different employee,
+      different line content, non-Pending candidate, order-independent line matching,
+      and a missing `referenceTimeMs` failing safe rather than silently misbehaving) —
+      8/8 passed. `clasp push -f` + `clasp deploy -i` → live at `@41`; live smoke test
+      confirmed both a GET read action and the POST submit path (deliberately-invalid
+      Employee ID, following the documented 302→echo-URL redirect) work on the new
+      deployment, nothing written to the live Sheet.
+    - **Live data cleanup**: asked the user whether to reject the 3 existing duplicate
+      rows (REQ#000227, REQ#000204, REQ#000205) via a one-off script or leave them for
+      manual cleanup — user chose to reject them manually through `admin.html`'s normal
+      flow (real credentials, proper audit trail) rather than have a script touch
+      production data directly. Left untouched (still `Pending`) as of this session.
+    - **Not yet done, by explicit choice** (same reasoning as items 16/37): no real
+      end-to-end live duplicate test was run against production data. Whether the fix
+      actually eliminates future occurrences isn't directly observed yet, only reasoned
+      through from the traced root cause and confirmed via the Node harness reproducing
+      the exact live failure that was found.
+
 ## Known loose ends / not yet done
 - **Items 14-17 above (session persistence, receipt preview modal + zoom/pan/download, receipt required + compression) have not been manually tested in a real browser.** Split status, confirmed by asking "has this actually been working?" and checking rather than assuming:
     - **Confirmed live via `curl` against the deployed `/exec` URL** (server-side logic, testable without a browser): `updateLineItemAmount` rejects bad credentials; `submitLiquidationRequest` now rejects a line with no `file`/`receiptUrl` (`"Line 1: a receipt photo is required."`) and rejects a PDF mime type (`"receipt file type not allowed (application/pdf)."`); the file picker's `accept="image/*"` change means a PDF can't even be selected anymore. A full successful-submission test was deliberately skipped to avoid writing real test data into the production Sheet/Drive.

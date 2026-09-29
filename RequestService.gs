@@ -37,7 +37,13 @@ var SUBMIT_DEDUPE_POLL_ATTEMPTS_ = 20; // ~30s total — gives a same-clientRequ
 // this app already is), look for an existing Pending request from the same
 // employee, submitted recently, whose lines match — and coalesce into it
 // instead of appending a duplicate row. See findRecentDuplicateRequest_.
-var DUPLICATE_SUBMIT_WINDOW_MS_ = 180000; // 3 minutes
+// The reference "now" for this window is the Phase-2-start timestamp (before
+// this call's own Drive uploads), not a fresh timestamp at check-time — a
+// multi-receipt submission's own upload time would otherwise silently eat
+// into the window before the check even runs (confirmed live: an 11-receipt
+// resubmit 171s after the original slipped past the old check because its
+// own upload phase pushed the actual check past 180s).
+var DUPLICATE_SUBMIT_WINDOW_MS_ = 300000; // 5 minutes
 
 /** Normalizes one line's comparable fields into a single string key, insensitive to
  * whether Date arrives as a Sheet-read Date object or a payload date string. */
@@ -67,10 +73,14 @@ function buildLineSignature_(lines) {
  * for an existing Pending request from the same employee, submitted within
  * DUPLICATE_SUBMIT_WINDOW_MS_, whose line items match. Returns the existing
  * RequestID, or null if no match is found.
+ * @param {number} referenceTimeMs Timestamp to measure the window from —
+ *   pass the caller's Phase-2-start time (captured before its own Drive
+ *   uploads), not a fresh check-time timestamp, so the current submission's
+ *   own upload duration doesn't silently shrink the window.
  */
-function findRecentDuplicateRequest_(employeeId, lineRows) {
+function findRecentDuplicateRequest_(employeeId, lineRows, referenceTimeMs) {
   var incomingSignature = buildLineSignature_(lineRows);
-  var now = new Date().getTime();
+  var now = referenceTimeMs;
 
   var candidateRequests = getAllRowsAsObjects_(SHEET_REQUESTS).filter(function (req) {
     if (String(req.EmployeeID) !== String(employeeId)) return false;
@@ -222,7 +232,7 @@ function submitLiquidationRequest(payload) {
     // against a near-simultaneous duplicate attempt too: whichever call
     // reaches this point first writes the real row, and the other finds it
     // here and coalesces instead of appending a second one.
-    var duplicateRequestId = findRecentDuplicateRequest_(employee.EmployeeID, lineRows);
+    var duplicateRequestId = findRecentDuplicateRequest_(employee.EmployeeID, lineRows, now.getTime());
     if (duplicateRequestId) {
       var duplicateResult = { success: true, requestId: duplicateRequestId };
       if (dedupeKey) cache.put(dedupeKey, JSON.stringify(duplicateResult), SUBMIT_DEDUPE_RESULT_TTL_SECONDS_);

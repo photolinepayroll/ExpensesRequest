@@ -76,7 +76,9 @@ search filter) is also 100% frontend — no backend push/deploy needed. Item 18 
 "Not included" exclusion) is deployed live — `clasp deploy -i`, now `@39`; requires
 `setupSheets()` to be re-run once to add the four new `RequestLines` columns. Item 37
 (content-based duplicate-submission fallback fix, a follow-up to item 16 — see below) is
-also deployed live — `clasp deploy -i`, now `@40`.
+also deployed live — `clasp deploy -i`, now `@40`. Item 38 (anchored-timestamp fix to
+item 37's dedupe window, a same-day follow-up) is also deployed live — `clasp deploy -i`,
+now `@41`.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
@@ -668,6 +670,59 @@ also deployed live — `clasp deploy -i`, now `@40`.
       window) was run against production data, to avoid writing test rows into the live
       Sheet/Drive — whether this actually eliminates the reported duplicate clusters isn't
       directly observed yet, only reasoned through from the traced root cause.
+
+38. **Anchored-timestamp fix to item 37's dedupe window — same-day follow-up, root cause
+    confirmed against real live duplicates.** User reported new duplicates the same day
+    item 37 shipped: REQ#000225/227 (Genita Reyes, ₱5,940.00, 11 line items each) and
+    REQ#000203/204/205 (Patani Hitalia, ₱1,731.00). Pulled the live `REQUESTS_CSV_URL`/
+    `REQUEST_LINES_CSV_URL` CSVs directly (not guessed) to get real timestamps: Patani's
+    trio (Sep 28, 21:26–21:30) all predate item 37's Sep 29 1:20 AM deploy — expected,
+    already-documented pre-fix gap, not a new bug. Genita's pair (Sep 29, 16:45:13 and
+    16:48:04 — **171 seconds apart**, inside the 3-minute window, 11 byte-identical line
+    items confirmed by diffing the CSV) happened **after** the fix was live — a genuine
+    remaining bug.
+    - **Root cause**: `submitLiquidationRequest`'s Phase 2 captures `now = new Date()`
+      *before* its own Drive uploads run; that's what gets written as `DateSubmitted`.
+      But `findRecentDuplicateRequest_` computed a **fresh** `new Date().getTime()` at
+      check-time inside Phase 3 — i.e. *after* the current (second) submission's own
+      Drive uploads had already finished. For an 11-receipt submission, that upload
+      delay alone can add tens of seconds, so by the time the duplicate check actually
+      ran, real elapsed time since the *first* request's `DateSubmitted` had already
+      crept past the 180s window — even though the two requests' own recorded
+      `DateSubmitted` values were only 171s apart. The window was effectively shrunk by
+      however long the second submission's own upload took, which is exactly the
+      scenario (multi-photo submissions) most likely to produce a slow original that
+      provokes a manual resubmit in the first place.
+    - **Fix** (`RequestService.gs`): `findRecentDuplicateRequest_` now takes an explicit
+      `referenceTimeMs` parameter instead of computing its own `new Date().getTime()`;
+      the call site passes `now.getTime()` — the same Phase-2-start timestamp already
+      captured before uploads — anchoring the window to "how long ago did the user
+      actually click Submit," not "how long ago did the check happen to run."
+      `DUPLICATE_SUBMIT_WINDOW_MS_` was also widened from `180000` (3 min) to `300000`
+      (5 min) for extra headroom on top of the anchoring fix, confirmed with the user.
+    - **Verified**: syntax-checked via `new Function(src)` (not `.gs`-compatible with
+      `node --check`); a standalone Node harness (stubbing `getAllRowsAsObjects_`/
+      `Utilities`/`Session`, loading only the constants+helpers portion of
+      `RequestService.gs` into a `vm` context) reproduced the exact live Genita scenario
+      (171s apart, simulated upload delay) and confirmed it's now caught, plus 7 more
+      assertions (boundary at 299s/301s from the new 5-min window, different employee,
+      different line content, non-Pending candidate, order-independent line matching,
+      and a missing-`referenceTimeMs` call failing safe to no-match rather than
+      silently misbehaving) — all 8 passed. `clasp push -f` + `clasp deploy -i` →
+      `@41`; live smoke test confirmed both GET (`getAllRequestsForPayroll`) and POST
+      (`submitLiquidationRequest` with a deliberately-invalid Employee ID, following the
+      documented 302→echo-URL redirect) work on the new deployment — nothing written to
+      the live Sheet.
+    - **Live data cleanup**: the 3 existing duplicate rows (REQ#000227, REQ#000204,
+      REQ#000205) were **not** touched by this session — user chose to reject them
+      manually via `admin.html`'s normal Reject flow (real Approver/Reviewer
+      credentials, proper audit trail) rather than a one-off script. Still `Pending` in
+      the live Sheet as of this writing.
+    - **Not yet done, by explicit choice** (same reasoning as items 16/37): no real
+      end-to-end live duplicate test was run against production data. Whether the
+      anchored timestamp + 5-minute window actually eliminates future occurrences isn't
+      directly observed yet, only reasoned through from the traced root cause and
+      confirmed via the Node harness reproducing the exact live failure.
 
 9. **Mobile "Failed to fetch" resilience, Approver queue routing-scope widened to every status,
    and approver names added to Print Preview receipt captions.** All 100% frontend
