@@ -119,13 +119,14 @@ function submitLiquidationRequest(payload) {
     if (alreadyDone) return alreadyDone;
   }
 
+  validatedEmployee_ = null;
   var validationError = validateSubmission_(payload);
   if (validationError) {
     return { success: false, error: validationError };
   }
+  timeStep_('submit: validated');
 
-  var employeeResult = getEmployeeByID(payload.employeeId);
-  var employee = employeeResult.employee;
+  var employee = validatedEmployee_ || getEmployeeByID(payload.employeeId).employee;
 
   // Phase 1 (short lock): only sequential ID generation (a fast
   // PropertiesService read-increment-write, see IdGenerator.gs) — resolved
@@ -137,6 +138,7 @@ function submitLiquidationRequest(payload) {
   } catch (e) {
     return { success: false, error: 'System is busy, please try again.' };
   }
+  timeStep_('submit: phase 1 lock acquired');
   var requestId;
   var awaitDedupeResult = false;
   try {
@@ -211,6 +213,7 @@ function submitLiquidationRequest(payload) {
     return { success: false, error: 'Submission failed: ' + e.message };
   }
 
+  timeStep_('submit: phase 2 uploads done');
   // Phase 3 (short lock again): only the Sheet writes. If this fails after
   // Phase 2's uploads already succeeded, the uploaded file(s) are orphaned in
   // Drive (unreferenced by any row) — an accepted tradeoff, not a bug: this
@@ -239,9 +242,7 @@ function submitLiquidationRequest(payload) {
       return duplicateResult;
     }
 
-    lineRows.forEach(function (row) {
-      appendRowFromObject_(SHEET_REQUEST_LINES, row);
-    });
+    appendRowsFromObjects_(SHEET_REQUEST_LINES, lineRows);
 
     appendRowFromObject_(SHEET_REQUESTS, {
       RequestID: requestId,
@@ -254,6 +255,7 @@ function submitLiquidationRequest(payload) {
     });
 
     SpreadsheetApp.flush();
+    timeStep_('submit: phase 3 writes done');
     var result = { success: true, requestId: requestId };
     if (dedupeKey) cache.put(dedupeKey, JSON.stringify(result), SUBMIT_DEDUPE_RESULT_TTL_SECONDS_);
     return result;
@@ -284,6 +286,7 @@ function getMyRequests(employeeId) {
 function getAllRequestsForPayroll(statusFilter, approverBiometricId) {
   var employeesById = null;
   var firstLineLocationByRequestId = null;
+  var allLines = getAllRowsAsObjects_(SHEET_REQUEST_LINES); // read once, shared below
   if (approverBiometricId) {
     employeesById = {};
     getAllRowsAsObjects_(SHEET_EMPLOYEES).forEach(function (emp) {
@@ -293,7 +296,7 @@ function getAllRequestsForPayroll(statusFilter, approverBiometricId) {
     // First matching row per RequestID wins — SHEET_REQUEST_LINES rows are
     // appended in submission order, so this is that request's first line item.
     firstLineLocationByRequestId = {};
-    getAllRowsAsObjects_(SHEET_REQUEST_LINES).forEach(function (line) {
+    allLines.forEach(function (line) {
       var rid = String(line.RequestID);
       if (!(rid in firstLineLocationByRequestId)) {
         firstLineLocationByRequestId[rid] = line.BaseLocation;
@@ -316,7 +319,7 @@ function getAllRequestsForPayroll(statusFilter, approverBiometricId) {
     }
 
     return true;
-  });
+  }, allLines);
 }
 
 // Used by advanceRequestStage's routing check for a single request — the
@@ -329,18 +332,25 @@ function getFirstLineBaseLocation_(requestId) {
   return lines.length ? lines[0].BaseLocation : '';
 }
 
-function buildRequestsWithLines_(requestFilterFn) {
+// preloadedLines is optional: callers that already read RequestLines pass it
+// in to avoid a second full-sheet read.
+function buildRequestsWithLines_(requestFilterFn, preloadedLines) {
   var requests = getAllRowsAsObjects_(SHEET_REQUESTS).filter(requestFilterFn);
-  var allLines = getAllRowsAsObjects_(SHEET_REQUEST_LINES);
+  var allLines = preloadedLines || getAllRowsAsObjects_(SHEET_REQUEST_LINES);
+
+  // Index lines by RequestID once (O(R+L)) instead of re-filtering per request.
+  var linesByRequestId = {};
+  allLines.forEach(function (line) {
+    var rid = String(line.RequestID);
+    (linesByRequestId[rid] = linesByRequestId[rid] || []).push(line);
+  });
 
   requests.sort(function (a, b) {
     return new Date(b.DateSubmitted) - new Date(a.DateSubmitted);
   });
 
   return requests.map(function (req) {
-    var lines = allLines.filter(function (line) {
-      return String(line.RequestID) === String(req.RequestID);
-    });
+    var lines = linesByRequestId[String(req.RequestID)] || [];
     var copy = {};
     Object.keys(req).forEach(function (k) { copy[k] = req[k]; });
     copy.lines = lines;
@@ -402,6 +412,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
     return { success: false, error: approverResult.error };
   }
   var actorName = approverResult.fullName;
+  timeStep_('advanceRequestStage: approver resolved');
 
   var lock = LockService.getScriptLock();
   try {
@@ -409,6 +420,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
   } catch (e) {
     return { success: false, error: 'System is busy, please try again.' };
   }
+  timeStep_('advanceRequestStage: lock acquired');
 
   try {
     var rowIndex = findRowIndexById_(SHEET_REQUESTS, 'RequestID', requestId);
@@ -416,9 +428,8 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
       return { success: false, error: 'Request not found.' };
     }
 
-    var sheet = getSheet_(SHEET_REQUESTS);
-    var headerMap = getHeaderMap_(sheet);
-    var currentStatus = sheet.getRange(rowIndex, headerMap['Status'] + 1).getValue();
+    var requestRow = getRowObject_(SHEET_REQUESTS, rowIndex);
+    var currentStatus = requestRow['Status'];
 
     var transitionError = validateStageTransition_(currentStatus, targetStage);
     if (transitionError) {
@@ -437,7 +448,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
     // unreachable, or a Staff employee whose store isn't listed), this
     // falls back to the role-only check already passed above.
     if (currentStatus === STATUS_PENDING) {
-      var employeeId = sheet.getRange(rowIndex, headerMap['EmployeeID'] + 1).getValue();
+      var employeeId = requestRow['EmployeeID'];
       var employeeInfo = getEmployeeRoutingInfo_(employeeId);
       var lineLocation = getFirstLineBaseLocation_(requestId);
       var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
@@ -451,7 +462,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
     }
 
     var fieldNames = STAGE_FIELD_NAMES[targetStage];
-    var existingRemarks = sheet.getRange(rowIndex, headerMap['Remarks'] + 1).getValue();
+    var existingRemarks = requestRow['Remarks'];
     var remarkLine = STAGE_DISPLAY_LABEL[targetStage] + ' by ' + actorName + (remark ? ': ' + remark : '');
     var updatedRemarks = existingRemarks ? existingRemarks + '\n' + remarkLine : remarkLine;
 
@@ -464,6 +475,7 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
     }
 
     updateRowFields_(SHEET_REQUESTS, rowIndex, fields);
+    timeStep_('advanceRequestStage: done');
 
     return { success: true };
   } catch (e) {
@@ -633,7 +645,8 @@ function authorizeLineEdit_(requestId, lineId, approverResult) {
 
   var requestSheet = getSheet_(SHEET_REQUESTS);
   var requestHeaderMap = getHeaderMap_(requestSheet);
-  var currentStatus = requestSheet.getRange(requestRowIndex, requestHeaderMap['Status'] + 1).getValue();
+  var requestRowData = getRowObject_(SHEET_REQUESTS, requestRowIndex);
+  var currentStatus = requestRowData['Status'];
 
   var requiredRole = REQUIRED_ROLE_BY_STATUS[currentStatus];
   if (!requiredRole) {
@@ -647,7 +660,7 @@ function authorizeLineEdit_(requestId, lineId, approverResult) {
   // Pending stage — only the specific required Approver can edit line items
   // on a Pending request, not just any Approver-role account.
   if (currentStatus === STATUS_PENDING) {
-    var employeeId = requestSheet.getRange(requestRowIndex, requestHeaderMap['EmployeeID'] + 1).getValue();
+    var employeeId = requestRowData['EmployeeID'];
     var employeeInfo = getEmployeeRoutingInfo_(employeeId);
     var lineLocation = getFirstLineBaseLocation_(requestId);
     var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);

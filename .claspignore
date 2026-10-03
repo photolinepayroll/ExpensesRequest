@@ -13,3 +13,4 @@
 !MealAllowanceService.gs
 !StoreDirectoryService.gs
 !ExemptionService.gs
+!CacheLayer.gs

@@ -25,6 +25,9 @@ function submissionWindowError_(employeeId) {
   return null;
 }
 
+/** Set by validateSubmission_ on success; reset by submitLiquidationRequest before each validation. */
+var validatedEmployee_ = null;
+
 function validateSubmission_(payload) {
   var windowError = submissionWindowError_(payload && payload.employeeId);
   if (windowError) return windowError;
@@ -37,6 +40,8 @@ function validateSubmission_(payload) {
   if (!employeeResult.found) {
     return 'Employee is invalid or inactive: ' + employeeResult.error;
   }
+  // Hand the verified row back to submitLiquidationRequest so it doesn't re-read Employees.
+  validatedEmployee_ = employeeResult.employee;
 
   if (!payload.lines || !Array.isArray(payload.lines) || payload.lines.length < 1) {
     return 'At least one line item is required.';

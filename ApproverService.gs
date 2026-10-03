@@ -23,5 +23,7 @@ function getApproverByCredentials_(userId, password) {
 }
 
 function loginApprover(userId, password) {
-  return getApproverByCredentials_(userId, password);
+  var result = getApproverByCredentials_(userId, password);
+  timeStep_('loginApprover: done');
+  return result;
 }

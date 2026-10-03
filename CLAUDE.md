@@ -922,6 +922,54 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
 
 </details>
 
+39. **Backend speed pass: per-execution memo, batched Sheet writes, CacheService for
+    Employees/Approvers/SubmissionExemptions, and timing logs.** Users reported lag on login,
+    submit, and status updates. Tracing showed the main cost was wasted Sheet API calls, not
+    a missing cache: every `SheetService.gs` helper re-ran `openById` + a header read (~6-8x per
+    `advanceRequestStage`), `updateRowFields_` wrote one cell at a time, submit did one
+    `appendRow` per line, and `getEmployeeByID` ran twice per submit. Deployed `@42`.
+    - `SheetService.gs`: `getSheet_`/`getHeaderMap_` memoized in plain globals (one execution
+      only, so never stale across calls; `resetSheetMemo_()` is called by `Setup.gs` after it adds
+      columns). `updateRowFields_` writes each run of *contiguous* changed columns with one
+      `setValues` and never rewrites untouched cells (so a text ID can't be re-parsed as a
+      number). New `appendRowsFromObjects_` (submit Phase 3 writes all lines in one call),
+      `getRowObject_` (one read per request row instead of one per cell), `timeStep_(label)`
+      (logs `[timing] label @ +Nms` to the Executions log, used in submit/`advanceRequestStage`/
+      `loginApprover`).
+    - New `CacheLayer.gs` (whitelisted in `.claspignore`): chunked JSON cache (30k chars per
+      chunk; one `CacheService` value is capped at 100KB), and a per-sheet **version token** -
+      a reader captures the token before reading, every write bumps it
+      (`invalidateSheetCache_`, called from all three write helpers), so a reader that raced a
+      writer stores under a dead version and is never served. Any cache error falls back to a
+      direct sheet read. `getAllRowsAsObjects_(sheet, {fresh:true})` bypasses it.
+      TTLs: Employees 300s, Approvers 120s (holds plaintext passwords, so shorter; a deactivated
+      approver can remain valid up to 120s - accepted, same security-model stance as the rest of
+      the app), SubmissionExemptions 30s plus invalidate-on-write (`isExemptionRowActive_` still
+      evaluated on every read). **Requests/RequestLines are deliberately never cached** -
+      status, routing and recompute decisions must read fresh data. The TTL map is built in a
+      function, not at file top level, because Apps Script file load order means `Config.gs`'s
+      `SHEET_*` constants may not exist yet. `clearAllCaches_()` (run from the editor) forces
+      hand-edits to Employees/Approvers to show immediately.
+    - `StoreDirectoryService.gs` now uses the chunked cache (the old single `put` silently failed
+      over 100KB, which made every approver resolve as "not found") plus a per-execution memo so
+      the directory isn't re-parsed per Pending row.
+    - Redundant reads removed: `validateSubmission_` hands its verified Employee row back via
+      `validatedEmployee_` (no second Employees read); `getAllRequestsForPayroll` reads
+      RequestLines once and `buildRequestsWithLines_` indexes lines by RequestID instead of an
+      O(R x L) filter; `advanceRequestStage`/`authorizeLineEdit_` read the request row once.
+    - **Verified**: syntax checks; a Node `vm` harness (fake Sheet/Cache) confirmed one
+      `openById` across many helper calls, a contiguous batched update is a single `setValues`
+      with the untouched text cell intact, a >100KB chunked round trip, invalidation, `fresh`
+      bypass, an evicted chunk giving a miss, and fallback when the cache throws; a regression
+      run of the real `.gs` files confirmed `advanceRequestStage`, a wrong-role rejection,
+      `submitLiquidationRequest` (including the `clientRequestId` replay) and
+      `getAllRequestsForPayroll` behave the same, with `openById` calls per advance down from
+      ~6-8 to 1. Live smoke test (GET list, bad-credential login via the 302 redirect) passed.
+    - **Not yet done / cannot verify here**: whether real users see faster login, submit and
+      Approve. Read the `[timing]` lines in the Apps Script Executions log for the real numbers.
+      This does not address Drive upload time, shared-lock contention, or Apps Script cold
+      start / the 302 redirect behind the intermittent "Connection problem".
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.

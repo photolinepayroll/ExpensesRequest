@@ -57,15 +57,20 @@ var STORE_DIRECTORY_CACHE_SECONDS = 300; // 5 min — this sits in the approval 
 // Returns the directory's data rows (header row stripped) as a 2D array, or
 // null if the sheet couldn't be fetched/parsed — callers must treat null the
 // same as "nothing found" and fall back gracefully, not throw.
+var storeDirectoryMemo_ = undefined; // per-execution: avoids re-parsing the directory once per Pending row
+
 function getStoreDirectoryRows_() {
-  var cache = CacheService.getScriptCache();
-  var cached = cache.get(STORE_DIRECTORY_CACHE_KEY);
-  if (cached) {
-    try {
-      return JSON.parse(cached);
-    } catch (e) {
-      // fall through and re-fetch
+  if (storeDirectoryMemo_ !== undefined) return storeDirectoryMemo_;
+
+  // Chunked cache (CacheLayer.gs) — a single put would silently fail over 100KB.
+  try {
+    var cached = cacheGetChunked_(STORE_DIRECTORY_CACHE_KEY);
+    if (cached) {
+      storeDirectoryMemo_ = cached;
+      return cached;
     }
+  } catch (e) {
+    // fall through and re-fetch
   }
 
   try {
@@ -75,7 +80,12 @@ function getStoreDirectoryRows_() {
       return null;
     }
     var rows = Utilities.parseCsv(response.getContentText()).slice(1); // drop header row
-    cache.put(STORE_DIRECTORY_CACHE_KEY, JSON.stringify(rows), STORE_DIRECTORY_CACHE_SECONDS);
+    try {
+      cachePutChunked_(STORE_DIRECTORY_CACHE_KEY, rows, STORE_DIRECTORY_CACHE_SECONDS);
+    } catch (putErr) {
+      Logger.log('Store directory cache put failed: ' + putErr.message);
+    }
+    storeDirectoryMemo_ = rows;
     return rows;
   } catch (e) {
     Logger.log('Store directory fetch threw: ' + e.message);

@@ -1093,3 +1093,51 @@ for the exact done/not-done breakdown, summarized here:**
 - **Janelyn Taglucop Angcay (BIO 51077)** was expected by the user to be an Area-Head-category person (routing to Jayriel) but isn't currently listed anywhere in the directory sheet — resolves as plain Staff instead. If she's meant to be Area Head, she needs adding to the directory's columns 24/25 (paired with any store in column 26) — a data fix, not code.
 - **The directory sheet's columns 11/12 are dead/misleading data** (see item 13's row-misalignment bug) — worth flagging to whoever maintains that external sheet, since they could either be cleaned up/removed, or fixed to realign with `STORES`, at which point revisit whether `StoreDirectoryService.gs`/`employee.js` should switch back or a maintainer explicitly confirms 24/25 should remain authoritative long-term.
 - **Batch export (item 19) print-preview window has not been tested in a real browser.** Deployment/syntax were confirmed live, and the export logic was verified end-to-end with a jsdom simulation plus live `curl` calls against `getAllRequestsForPayroll`, but a jsdom test can't see actual rendering. Still outstanding, for the user to check personally: whether the popup actually opens (vs. gets blocked) in real Safari/Firefox/Chrome; the print-preview report's real visual appearance (summary table styling, receipt image sizing/legibility); and the browser's print dialog/"Save as PDF" pagination behavior when a request has multiple lines with receipts.
+
+39. **Backend speed pass: per-execution memo, batched Sheet writes, CacheService for
+    Employees/Approvers/SubmissionExemptions, and timing logs.** Users reported lag on login,
+    submit, and status updates. Tracing showed the main cost was wasted Sheet API calls, not
+    a missing cache: every `SheetService.gs` helper re-ran `openById` + a header read (~6-8x per
+    `advanceRequestStage`), `updateRowFields_` wrote one cell at a time, submit did one
+    `appendRow` per line, and `getEmployeeByID` ran twice per submit. Deployed `@42`.
+    - `SheetService.gs`: `getSheet_`/`getHeaderMap_` memoized in plain globals (one execution
+      only, so never stale across calls; `resetSheetMemo_()` is called by `Setup.gs` after it adds
+      columns). `updateRowFields_` writes each run of *contiguous* changed columns with one
+      `setValues` and never rewrites untouched cells (so a text ID can't be re-parsed as a
+      number). New `appendRowsFromObjects_` (submit Phase 3 writes all lines in one call),
+      `getRowObject_` (one read per request row instead of one per cell), `timeStep_(label)`
+      (logs `[timing] label @ +Nms` to the Executions log, used in submit/`advanceRequestStage`/
+      `loginApprover`).
+    - New `CacheLayer.gs` (whitelisted in `.claspignore`): chunked JSON cache (30k chars per
+      chunk; one `CacheService` value is capped at 100KB), and a per-sheet **version token** -
+      a reader captures the token before reading, every write bumps it
+      (`invalidateSheetCache_`, called from all three write helpers), so a reader that raced a
+      writer stores under a dead version and is never served. Any cache error falls back to a
+      direct sheet read. `getAllRowsAsObjects_(sheet, {fresh:true})` bypasses it.
+      TTLs: Employees 300s, Approvers 120s (holds plaintext passwords, so shorter; a deactivated
+      approver can remain valid up to 120s - accepted, same security-model stance as the rest of
+      the app), SubmissionExemptions 30s plus invalidate-on-write (`isExemptionRowActive_` still
+      evaluated on every read). **Requests/RequestLines are deliberately never cached** -
+      status, routing and recompute decisions must read fresh data. The TTL map is built in a
+      function, not at file top level, because Apps Script file load order means `Config.gs`'s
+      `SHEET_*` constants may not exist yet. `clearAllCaches_()` (run from the editor) forces
+      hand-edits to Employees/Approvers to show immediately.
+    - `StoreDirectoryService.gs` now uses the chunked cache (the old single `put` silently failed
+      over 100KB, which made every approver resolve as "not found") plus a per-execution memo so
+      the directory isn't re-parsed per Pending row.
+    - Redundant reads removed: `validateSubmission_` hands its verified Employee row back via
+      `validatedEmployee_` (no second Employees read); `getAllRequestsForPayroll` reads
+      RequestLines once and `buildRequestsWithLines_` indexes lines by RequestID instead of an
+      O(R x L) filter; `advanceRequestStage`/`authorizeLineEdit_` read the request row once.
+    - **Verified**: syntax checks; a Node `vm` harness (fake Sheet/Cache) confirmed one
+      `openById` across many helper calls, a contiguous batched update is a single `setValues`
+      with the untouched text cell intact, a >100KB chunked round trip, invalidation, `fresh`
+      bypass, an evicted chunk giving a miss, and fallback when the cache throws; a regression
+      run of the real `.gs` files confirmed `advanceRequestStage`, a wrong-role rejection,
+      `submitLiquidationRequest` (including the `clientRequestId` replay) and
+      `getAllRequestsForPayroll` behave the same, with `openById` calls per advance down from
+      ~6-8 to 1. Live smoke test (GET list, bad-credential login via the 302 redirect) passed.
+    - **Not yet done / cannot verify here**: whether real users see faster login, submit and
+      Approve. Read the `[timing]` lines in the Apps Script Executions log for the real numbers.
+      This does not address Drive upload time, shared-lock contention, or Apps Script cold
+      start / the 302 redirect behind the intermittent "Connection problem".

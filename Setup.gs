@@ -109,6 +109,7 @@ function createOrMigrateSheet_(ss, name, headers) {
     sheet.getRange(1, lastCol + 1, 1, missingHeaders.length).setValues([missingHeaders]);
     sheet.getRange(1, lastCol + 1, 1, missingHeaders.length).setFontWeight('bold');
     Logger.log('Added missing columns to ' + name + ': ' + missingHeaders.join(', '));
+    resetSheetMemo_();
   }
 
   return sheet;
