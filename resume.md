@@ -1148,7 +1148,7 @@ for the exact done/not-done breakdown, summarized here:**
     (group = one `EmployeeID` + one `CreditingDate`, from `groupRequestsForReport_`): a group with
     **one** request emphasizes that request's own row; a group with **2+** requests keeps its request
     rows plain and emphasizes only the subtotal row. Both use the new `.emphasis-row` style: **bigger
-    bold text** (14px; the user rejected a row tint/borders) with a **yellow background on the Total amount
+    bold text** (12px; the user rejected a row tint/borders) with a **yellow background on the Total amount
     cell only** (`.total-cell`, `print-color-adjust: exact` so it survives printing), replacing the old gray `.subtotal-row`
     look. The whole report also now prints **all black** — text, table lines/borders, signature
     lines, table header (white bg, black text) (a `filter: grayscale(100%)` on receipt

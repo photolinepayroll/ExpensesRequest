@@ -917,7 +917,7 @@ function buildExportReportHtml_(requests) {
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.grand-total-row td { border-top: 2px solid #000; }' +
     'tr { page-break-inside: avoid; }' +
-    '.emphasis-row td { font-weight: bold; font-size: 14px; }' +
+    '.emphasis-row td { font-weight: bold; font-size: 12px; padding-top: 4px; padding-bottom: 4px; }' +
     // Yellow highlight on the Total amount cell only (the rest of the row stays
     // plain); print-color-adjust keeps the background when printing/saving PDF.
     '.total-cell { background: #ffeb3b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
