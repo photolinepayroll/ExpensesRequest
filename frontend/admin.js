@@ -886,13 +886,14 @@ function buildExportReportHtml_(requests) {
     'body { font-family: Arial, sans-serif; margin: 16px; color: #000; }' +
     'h1 { color: #000; font-size: 18px; margin-bottom: 4px; }' +
     'p.subtitle { color: #000; font-size: 12px; margin-top: 0; margin-bottom: 16px; }' +
-    '.table-wrap { width: 191mm; }' +
+    // Summary table prints on the same portrait long-bond page as everything else, text wrapping
+    // normally (landscape + no-wrap/shrink-to-fit versions were tried and rejected).
+    '.table-wrap { width: 100%; }' +
     // @page already supplies the 12mm margin, so drop the body's own margin when printing
     // (it was doubling up and costing ~8mm of usable width).
     '@media print { body { margin: 0; } }' +
-    'table { width: 100%; border-collapse: collapse; font-size: 10px; }' +
-    '#summary-table.allow-wrap th, #summary-table.allow-wrap td { white-space: normal; }' +
-    'th, td { border: 1px solid #000; padding: 0.35em 0.5em; text-align: left; vertical-align: top; white-space: nowrap; }' +
+    'table { width: 100%; border-collapse: collapse; font-size: 11px; }' +
+    'th, td { border: 1px solid #000; padding: 0.35em 0.5em; text-align: left; vertical-align: top; }' +
     'th { background: #fff; color: #000; border-bottom: 2px solid #000; }' +
     '@page { size: 215.9mm 330.2mm; margin: 12mm; }' +
     // Page is long bond 8.5x13in (215.9mm x 330.2mm); with 12mm margins the printable
@@ -954,15 +955,6 @@ function buildExportReportHtml_(requests) {
     '<th>Request ID</th><th>Bio ID</th><th>Employee</th><th>Status</th><th>Total</th>' +
     '<th>Approved</th><th>Reviewed</th><th>Verified</th><th>Crediting Date</th>' +
     '</tr></thead><tbody>' + summaryRows + grandTotalRow + '</tbody></table></div>' +
-    // No text wrapping in the summary table: instead of letting long names wrap onto extra
-    // lines (which eats paper), shrink the whole table's font until it fits the page width.
-    // Shrink to fit with no wrapping; if that would need a font under 7px (unreadable on paper),
-    // allow wrapping again and shrink from 8px instead, floor 6px.
-    '<script>(function(){var t=document.getElementById("summary-table"),w=t.parentNode,fs=10;' +
-    'function tooWide(){return t.getBoundingClientRect().width>w.clientWidth+0.5;}' +
-    't.style.fontSize=fs+"px";' +
-    'while(tooWide()&&fs>7){fs-=0.25;t.style.fontSize=fs+"px";}' +
-    'if(tooWide()){t.className="allow-wrap";fs=8;t.style.fontSize=fs+"px";while(tooWide()&&fs>6){fs-=0.25;t.style.fontSize=fs+"px";}}})();</script>' +
     signatureBlockHtml +
     receiptPagesHtml +
     missingHtml +

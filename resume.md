@@ -1168,15 +1168,12 @@ for the exact done/not-done breakdown, summarized here:**
       (see item 6), they were recomputed for the taller ~306mm content area: 2-up cells 124mm -> 147mm, 6-up rows
       82mm -> 97mm (both still exactly 2 / 6 receipts per page). Summary table needs no change - it just flows
       onto fewer pages. **Not yet checked in a real printed PDF**: that exactly 2 and 6 receipts still fit per page.
-    - **Follow-up: Bio ID shown in Print Preview (column only) + no text wrapping.** `buildExportReportHtml_`
-      has a new "Bio ID" column (`EmployeeID`, right after Request ID) — deliberately *only* the column, not
-      added to the subtotal label or receipt captions, to save paper. Subtotal/Grand Total `colspan`s
-      adjusted (3 -> 4). To keep the 9-column table from eating pages, summary-table cells are
-      `white-space: nowrap` and the table sits in a fixed `.table-wrap` (191mm = long-bond content width;
-      `@media print { body { margin: 0 } }` since `@page` already gives 12mm — the body's own 16px margin was
-      doubling up and the first 174mm version shrank the font to near-unreadable); a tiny inline script right
-      after it shrinks the table's font (10px start, 0.25px steps) until it fits, floor 7px with no wrapping;
-      if even that doesn't fit it re-enables wrapping (`.allow-wrap`) and shrinks from 8px, floor 6px.
-      Sizes are `em`-based (emphasized rows 1.15em) so the shrink scales everything. **Not yet checked in
-      a real printed PDF**: the 191mm width, the shrink/fallback script in the report window, and the
-      resulting font size with real data.
+    - **Follow-up: Bio ID column in Print Preview; table stays portrait with normal text wrapping.**
+      `buildExportReportHtml_` has a new "Bio ID" column (`EmployeeID`, right after Request ID) — only the
+      column, not added to the subtotal label or receipt captions, to save paper; Subtotal/Grand Total
+      `colspan`s adjusted (3 -> 4). Two layout experiments were **tried and rejected by the user** and fully
+      removed: (1) `white-space: nowrap` + an inline shrink-to-fit script (font got unreadably small in
+      portrait), (2) a named landscape `@page summary` for the summary section. Final: same portrait long-bond
+      `@page` as the receipts, wrapping allowed, table font 11px (`em`-based padding/emphasis), and
+      `@media print { body { margin: 0 } }` since `@page` already provides the 12mm margin (the body's own
+      16px was doubling up). **Not yet checked in a real printed PDF** (page count / fit).
