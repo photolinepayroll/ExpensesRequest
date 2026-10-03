@@ -78,7 +78,8 @@ search filter) is also 100% frontend — no backend push/deploy needed. Item 18 
 (content-based duplicate-submission fallback fix, a follow-up to item 16 — see below) is
 also deployed live — `clasp deploy -i`, now `@40`. Item 38 (anchored-timestamp fix to
 item 37's dedupe window, a same-day follow-up) is also deployed live — `clasp deploy -i`,
-now `@41`.
+now `@41`. Item 39 (backend speed pass: sheet memo, batched writes, CacheService layer,
+timing logs) is also deployed live — `clasp deploy -i`, now `@42`.
 
 10. **Authorizer-only "Submission Exemption" — emergency 1-hour bypass of the Thu/Fri
     submission block.** New backend file `ExemptionService.gs` (whitelisted in
