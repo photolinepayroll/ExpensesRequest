@@ -1151,8 +1151,9 @@ for the exact done/not-done breakdown, summarized here:**
     bold text** (14px; the user rejected a row tint/borders) with a **yellow background on the Total amount
     cell only** (`.total-cell`, `print-color-adjust: exact` so it survives printing), replacing the old gray `.subtotal-row`
     look. The whole report also now prints **all black** — text, table lines/borders, signature
-    lines, table header (white bg, black text) and receipt images (`filter: grayscale(100%)`, kept
-    grayscale rather than a hard 1-bit threshold so receipt text stays legible). Also `tr { page-break-inside: avoid }`. Same
+    lines, table header (white bg, black text) (a `filter: grayscale(100%)` on receipt
+    images was tried and **removed**: it made Chrome's print preview hang on "Loading preview..." with many
+    receipts; images stay in their original color — use the print dialog's "Black and white" Color option). Also `tr { page-break-inside: avoid }`. Same
     employee on two Crediting Dates = two groups, so each gets its own emphasized line. An earlier
     attempt (highlight *every* request row plus a `#` column) was wrong per the user and was reverted
     before commit. Columns, Grand Total, signature block, receipt pages, CSV export and the

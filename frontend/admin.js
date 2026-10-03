@@ -921,9 +921,9 @@ function buildExportReportHtml_(requests) {
     // Yellow highlight on the Total amount cell only (the rest of the row stays
     // plain); print-color-adjust keeps the background when printing/saving PDF.
     '.total-cell { background: #ffeb3b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
-    // Everything prints in black (text, lines, and receipt images in grayscale) —
-    // no color, no highlight, for a clean black-and-white audit hard copy.
-    '.receipt-cell img { filter: grayscale(100%); }' +
+    // NOTE: no CSS filter (e.g. grayscale) on receipt images — it made Chrome's print
+    // preview hang on "Loading preview..." with many receipts. Choose "Black and white"
+    // in the print dialog's Color option to get grayscale images instead.
     '.signature-block { display: flex; gap: 40mm; margin-top: 14mm; page-break-inside: avoid; }' +
     '.signature-line { flex: 1; }' +
     '.signature-line .sig-blank { border-bottom: 1px solid #000; height: 14mm; }' +
