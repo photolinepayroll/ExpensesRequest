@@ -971,6 +971,27 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       This does not address Drive upload time, shared-lock contention, or Apps Script cold
       start / the 302 redirect behind the intermittent "Connection problem".
 
+40. **Print Preview: exactly one emphasized total per employee per disbursement.** On the printed
+    hard copy an auditor couldn't tell which figure is "what this employee gets for this
+    disbursement". `frontend/admin.js`'s `buildExportReportHtml_` now applies a per-group rule
+    (group = one `EmployeeID` + one `CreditingDate`, from `groupRequestsForReport_`): a group with
+    **one** request emphasizes that request's own row; a group with **2+** requests keeps its request
+    rows plain and emphasizes only the subtotal row. Both use the new `.emphasis-row` style: **bigger
+    bold text** (14px; the user rejected a row tint/borders) with a **yellow background on the Total amount
+    cell only** (`.total-cell`, `print-color-adjust: exact` so it survives printing), replacing the old gray `.subtotal-row`
+    look. The whole report also now prints **all black** — text, table lines/borders, signature
+    lines, table header (white bg, black text) and receipt images (`filter: grayscale(100%)`, kept
+    grayscale rather than a hard 1-bit threshold so receipt text stays legible). Also `tr { page-break-inside: avoid }`. Same
+    employee on two Crediting Dates = two groups, so each gets its own emphasized line. An earlier
+    attempt (highlight *every* request row plus a `#` column) was wrong per the user and was reverted
+    before commit. Columns, Grand Total, signature block, receipt pages, CSV export and the
+    "subtotal only for 2+" rule are unchanged. 100% frontend, no deploy needed.
+    - **Verified**: `node --check`; a Node `vm` harness rendering the real function (3 requests
+      for one employee -> plain rows + emphasized subtotal; 1 request -> emphasized row, no subtotal;
+      same employee on two dates -> both rows emphasized) confirmed exactly one emphasized line per
+      group, Grand Total last and not emphasized, no `<tfoot>`, one signature block. **Not yet checked
+      in a real browser or printed PDF** (look on paper, color and black-and-white, page breaks).
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.

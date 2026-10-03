@@ -746,12 +746,17 @@ function buildExportReportHtml_(requests) {
   var groups = groupRequestsForReport_(requests);
 
   var summaryRows = groups.map(function (g) {
+    // One emphasized line per employee per disbursement (Crediting Date): a
+    // single-request group emphasizes that request's own row; a multi-request
+    // group keeps its request rows plain and emphasizes only the subtotal row
+    // below — so the auditor's eye lands on exactly one total, never two.
+    var isSingle = g.requests.length === 1;
     var rows = g.requests.map(function (req) {
-      return '<tr>' +
+      return '<tr' + (isSingle ? ' class="emphasis-row"' : '') + '>' +
         '<td>' + escapeHtml_(req.RequestID) + '</td>' +
         '<td>' + escapeHtml_(req.EmployeeName) + '</td>' +
         '<td>' + escapeHtml_(STATUS_DISPLAY_LABELS[req.Status] || req.Status) + '</td>' +
-        '<td>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
+        '<td' + (isSingle ? ' class="total-cell"' : '') + '>' + escapeHtml_(formatCurrency(req.TotalAmount)) + '</td>' +
         '<td>' + escapeHtml_(req.ApprovedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ApprovedDate)) + '</td>' +
         '<td>' + escapeHtml_(req.ReviewedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.ReviewedDate)) + '</td>' +
         '<td>' + escapeHtml_(req.AuthorizedBy) + '<br>' + escapeHtml_(formatDateDisplay(req.AuthorizedDate)) + '</td>' +
@@ -764,9 +769,9 @@ function buildExportReportHtml_(requests) {
       var subtotal = g.requests.reduce(function (s, r) { return s + (Number(r.TotalAmount) || 0); }, 0);
       var label = 'Subtotal — ' + escapeHtml_(g.employeeName) + ' — Crediting ' +
         (g.creditingDate ? escapeHtml_(formatDateDisplay(g.creditingDate)) : 'N/A');
-      rows += '<tr class="subtotal-row">' +
+      rows += '<tr class="subtotal-row emphasis-row">' +
         '<td colspan="3">' + label + '</td>' +
-        '<td>' + escapeHtml_(formatCurrency(subtotal)) + '</td>' +
+        '<td class="total-cell">' + escapeHtml_(formatCurrency(subtotal)) + '</td>' +
         '<td colspan="4"></td></tr>';
     }
     return rows;
@@ -877,12 +882,12 @@ function buildExportReportHtml_(requests) {
     '<title>Liquidation Export — ' + escapeHtml_(now) + '</title>' +
     '<style>' +
     '* { box-sizing: border-box; }' +
-    'body { font-family: Arial, sans-serif; margin: 16px; color: #1e293b; }' +
-    'h1 { color: #1e3a5f; font-size: 18px; margin-bottom: 4px; }' +
-    'p.subtitle { color: #64748b; font-size: 12px; margin-top: 0; margin-bottom: 16px; }' +
+    'body { font-family: Arial, sans-serif; margin: 16px; color: #000; }' +
+    'h1 { color: #000; font-size: 18px; margin-bottom: 4px; }' +
+    'p.subtitle { color: #000; font-size: 12px; margin-top: 0; margin-bottom: 16px; }' +
     'table { width: 100%; border-collapse: collapse; font-size: 11px; }' +
-    'th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }' +
-    'th { background: #1e3a5f; color: #fff; }' +
+    'th, td { border: 1px solid #000; padding: 6px 8px; text-align: left; vertical-align: top; }' +
+    'th { background: #fff; color: #000; border-bottom: 2px solid #000; }' +
     '@page { size: letter portrait; margin: 12mm; }' +
     // Letter is 215.9mm x 279.4mm; with 12mm margins the printable content
     // area is ~255mm tall. A fixed physical height here (not the old
@@ -901,22 +906,29 @@ function buildExportReportHtml_(requests) {
     // resolution during pagination.
     '.receipt-page { page-break-before: always; padding-top: 3mm; box-sizing: border-box; }' +
     '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 2px; }' +
-    '.receipt-approvers { font-size: 9px; color: #64748b; margin: 0 0 4px; }' +
+    '.receipt-approvers { font-size: 9px; color: #000; margin: 0 0 4px; }' +
     '.receipt-page-2up { display: flex; flex-direction: column; gap: 4mm; }' +
-    '.receipt-page-2up .receipt-cell { height: 124mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
+    '.receipt-page-2up .receipt-cell { height: 124mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
     '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 82mm); gap: 3mm; }' +
-    '.receipt-page-6up .receipt-cell { height: 82mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #cbd5e1; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
+    '.receipt-page-6up .receipt-cell { height: 82mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 2px; }' +
     '.receipt-page-6up .receipt-approvers { font-size: 7px; margin-bottom: 3px; }' +
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
-    '.grand-total-row td { border-top: 2px solid #1e3a5f; }' +
-    '.subtotal-row td { background: #eef2f7; font-weight: bold; border-top: 1px solid #94a3b8; }' +
+    '.grand-total-row td { border-top: 2px solid #000; }' +
+    'tr { page-break-inside: avoid; }' +
+    '.emphasis-row td { font-weight: bold; font-size: 14px; }' +
+    // Yellow highlight on the Total amount cell only (the rest of the row stays
+    // plain); print-color-adjust keeps the background when printing/saving PDF.
+    '.total-cell { background: #ffeb3b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
+    // Everything prints in black (text, lines, and receipt images in grayscale) —
+    // no color, no highlight, for a clean black-and-white audit hard copy.
+    '.receipt-cell img { filter: grayscale(100%); }' +
     '.signature-block { display: flex; gap: 40mm; margin-top: 14mm; page-break-inside: avoid; }' +
     '.signature-line { flex: 1; }' +
-    '.signature-line .sig-blank { border-bottom: 1px solid #1e293b; height: 14mm; }' +
+    '.signature-line .sig-blank { border-bottom: 1px solid #000; height: 14mm; }' +
     '.signature-line .sig-date { height: 8mm; margin-top: 10mm; }' +
-    '.signature-line p { margin: 4px 0 0; font-size: 11px; color: #1e293b; }' +
+    '.signature-line p { margin: 4px 0 0; font-size: 11px; color: #000; }' +
     '.missing-note { page-break-before: always; padding-top: 16px; }' +
     '.missing-note li { font-size: 12px; margin-bottom: 4px; }' +
     '.no-print { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }' +
