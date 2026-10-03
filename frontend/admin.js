@@ -888,9 +888,10 @@ function buildExportReportHtml_(requests) {
     'table { width: 100%; border-collapse: collapse; font-size: 11px; }' +
     'th, td { border: 1px solid #000; padding: 6px 8px; text-align: left; vertical-align: top; }' +
     'th { background: #fff; color: #000; border-bottom: 2px solid #000; }' +
-    '@page { size: letter portrait; margin: 12mm; }' +
-    // Letter is 215.9mm x 279.4mm; with 12mm margins the printable content
-    // area is ~255mm tall. A fixed physical height here (not the old
+    '@page { size: 215.9mm 330.2mm; margin: 12mm; }' +
+    // Page is long bond 8.5x13in (215.9mm x 330.2mm); with 12mm margins the printable
+    // content area is ~306mm tall (cells below: 2 x 147mm + 4mm gap + 3mm pad = 301mm;
+    // 3 x 97mm + 2 x 3mm gaps + 3mm pad = 300mm). Originally sized for Letter (~255mm tall). A fixed physical height here (not the old
     // "min-height: 90vh", a viewport unit meaningless once printed) is what
     // lets the 2-up/6-up children's "height: 100%" resolve to something real
     // instead of collapsing to auto content height — that collapse was the
@@ -908,10 +909,10 @@ function buildExportReportHtml_(requests) {
     '.receipt-caption { font-weight: bold; font-size: 12px; margin-bottom: 2px; }' +
     '.receipt-approvers { font-size: 9px; color: #000; margin: 0 0 4px; }' +
     '.receipt-page-2up { display: flex; flex-direction: column; gap: 4mm; }' +
-    '.receipt-page-2up .receipt-cell { height: 124mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
+    '.receipt-page-2up .receipt-cell { height: 147mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-2up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +
-    '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 82mm); gap: 3mm; }' +
-    '.receipt-page-6up .receipt-cell { height: 82mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
+    '.receipt-page-6up { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 97mm); gap: 3mm; }' +
+    '.receipt-page-6up .receipt-cell { height: 97mm; display: flex; flex-direction: column; min-height: 0; border: 1px solid #000; padding: 6px; box-sizing: border-box; page-break-inside: avoid; }' +
     '.receipt-page-6up .receipt-caption { font-size: 9px; margin-bottom: 2px; }' +
     '.receipt-page-6up .receipt-approvers { font-size: 7px; margin-bottom: 3px; }' +
     '.receipt-page-6up .receipt-cell img { flex: 1 1 auto; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: 0 auto; }' +

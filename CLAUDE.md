@@ -992,6 +992,11 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       same employee on two dates -> both rows emphasized) confirmed exactly one emphasized line per
       group, Grand Total last and not emphasized, no `<tfoot>`, one signature block. **Not yet checked
       in a real browser or printed PDF** (look on paper, color and black-and-white, page breaks).
+    - **Follow-up: print page size is now long bond 8.5 x 13 in** (`@page { size: 215.9mm 330.2mm; margin: 12mm }`,
+      user's choice over US Legal 8.5x14 / a custom 11x13). Because the receipt layouts use explicit mm heights
+      (see item 6), they were recomputed for the taller ~306mm content area: 2-up cells 124mm -> 147mm, 6-up rows
+      82mm -> 97mm (both still exactly 2 / 6 receipts per page). Summary table needs no change - it just flows
+      onto fewer pages. **Not yet checked in a real printed PDF**: that exactly 2 and 6 receipts still fit per page.
 
 ## Security model (intentional, not an oversight)
 
