@@ -1177,3 +1177,16 @@ for the exact done/not-done breakdown, summarized here:**
       `@page` as the receipts, wrapping allowed, table font 11px (`em`-based padding/emphasis), and
       `@media print { body { margin: 0 } }` since `@page` already provides the 12mm margin (the body's own
       16px was doubling up). **Not yet checked in a real printed PDF** (page count / fit).
+
+41. **Meal Allowance: Mother Branch ₱0 zone is 1.5km; nearest assigned store wins.** The single 5km
+    assigned-store radius let a Mother Branch and a nearby covered branch both match, and
+    `maResolveRegularAllowance_` (`frontend/meal-allowance.js`) took the first in sheet order. Now: a
+    "MOTHER BRANCH" row qualifies only within `MA_MOTHER_BRANCH_ZERO_RADIUS_METERS` = 1500 (rule from the
+    user: within 1km = at home, the 1-1.5km band also pays no allowance, so effectively 1.5km); other
+    assigned rows keep `MA_ASSIGNED_OVERRIDE_RADIUS_METERS` = 5000; among qualifying rows the **nearest**
+    wins regardless of sheet order. Senior Head bracket and the regional fallback are unchanged. 100%
+    frontend, no deploy.
+    - **Verified**: `node --check`; a Node `vm` harness against the real function (MB at 0.9/1.4km -> 0,
+      1.6km -> regional, covered branch within 5km -> override, nearest wins with MB first or last,
+      non-assigned employee -> regional) all passed. **Not yet checked in a real browser** or against live
+      BIO 373/470 data.

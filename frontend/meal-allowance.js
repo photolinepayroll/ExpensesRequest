@@ -25,6 +25,10 @@ var maLastSavedLineItem = null; // set after a successful save, consumed by "Add
 // live case: BIO 470/Walter Punsalan at "R. Antique", ~2.24km reference-vs-
 // real drift), so this is intentionally generous.
 var MA_ASSIGNED_OVERRIDE_RADIUS_METERS = 5000;
+// The employee's own Mother Branch (home base) is stricter: End OUT within 1km
+// counts as at-home, and the 1km-1.5km band also pays no allowance, so the
+// effective no-allowance zone is 1.5km. Beyond it, normal rules apply.
+var MA_MOTHER_BRANCH_ZERO_RADIUS_METERS = 1500;
 
 function initMealAllowanceUtility() {
   $('tab-utilities').addEventListener('click', function () {
@@ -213,11 +217,13 @@ function maResolveRegularAllowance_(endRec, regionStore) {
     }
   }
 
+  // Collect every qualifying assigned-store row, then take the NEAREST one —
+  // not the first in sheet order — so a Mother Branch and a nearby covered
+  // branch can't shadow each other depending on row order.
   var matched = null;
+  var matchedDist = Infinity;
   if (maStoreCache) {
     maStoreCache.forEach(function (store) {
-      if (matched) return;
-
       var techBioId = String(store['BIO ID'] || '').trim().toLowerCase();
       var areaHeadBioId = String(store['BIO'] || '').trim().toLowerCase();
       var role, amountField;
@@ -228,18 +234,21 @@ function maResolveRegularAllowance_(endRec, regionStore) {
       var sLat = parseFloat(store['Latitude (num)']);
       var sLon = parseFloat(store['Longitude (num)']);
       if (!isFinite(sLat) || !isFinite(sLon)) return;
-      if (maHaversineMeters_(endRec.lat, endRec.lon, sLat, sLon) > MA_ASSIGNED_OVERRIDE_RADIUS_METERS) return;
-
+      var dist = maHaversineMeters_(endRec.lat, endRec.lon, sLat, sLon);
       var rawAmount = String(store[amountField] || '').trim();
-      if (/mother\s*branch/i.test(rawAmount)) {
-        matched = { amount: 0, source: role === 'AssignedTech' ? 'OwnMotherBranchTech' : 'OwnMotherBranchAreaHead' };
-        return;
-      }
+      var isMotherBranch = /mother\s*branch/i.test(rawAmount);
+      var radius = isMotherBranch ? MA_MOTHER_BRANCH_ZERO_RADIUS_METERS : MA_ASSIGNED_OVERRIDE_RADIUS_METERS;
+      if (dist > radius || dist >= matchedDist) return;
 
-      var amount = Number(rawAmount);
-      var storeRegularAmount = Number(store['REGULAR (AUDIT/TEC/STAFF)']);
-      if (!isFinite(storeRegularAmount)) storeRegularAmount = regionAmount;
-      matched = { amount: isFinite(amount) ? amount : storeRegularAmount, source: role };
+      if (isMotherBranch) {
+        matched = { amount: 0, source: role === 'AssignedTech' ? 'OwnMotherBranchTech' : 'OwnMotherBranchAreaHead' };
+      } else {
+        var amount = Number(rawAmount);
+        var storeRegularAmount = Number(store['REGULAR (AUDIT/TEC/STAFF)']);
+        if (!isFinite(storeRegularAmount)) storeRegularAmount = regionAmount;
+        matched = { amount: isFinite(amount) ? amount : storeRegularAmount, source: role };
+      }
+      matchedDist = dist;
     });
   }
 
