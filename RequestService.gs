@@ -128,6 +128,13 @@ function submitLiquidationRequest(payload) {
 
   var employee = validatedEmployee_ || getEmployeeByID(payload.employeeId).employee;
 
+  // A request ID reserved earlier by reserveRequestId (the outbox flow: receipts were already uploaded
+  // one photo at a time into that request's folder) — must belong to this same employee.
+  var reservedRequestId = payload.requestId ? String(payload.requestId) : '';
+  if (reservedRequestId && !getReservation_(reservedRequestId, employee.EmployeeID)) {
+    return { success: false, error: 'This request ID was not reserved for this employee (or the reservation expired) — please resubmit.' };
+  }
+
   // Phase 1 (short lock): only sequential ID generation (a fast
   // PropertiesService read-increment-write, see IdGenerator.gs) — resolved
   // now so Phase 2's Drive folders still land at the normal
@@ -156,7 +163,7 @@ function submitLiquidationRequest(payload) {
       }
     }
     if (!awaitDedupeResult) {
-      requestId = generateRequestId_();
+      requestId = reservedRequestId || generateRequestId_();
     }
   } finally {
     lock.releaseLock();
@@ -264,6 +271,102 @@ function submitLiquidationRequest(payload) {
     return { success: false, error: 'Submission failed: ' + e.message };
   } finally {
     lock2.releaseLock();
+  }
+}
+
+// ---- Reserve-then-upload flow (used by frontend/outbox.js) ----
+// reserveRequestId hands out the sequential RequestID up front and pre-creates its Drive folder once;
+// uploadReceipt then saves ONE photo per call (no lock — Drive I/O never blocks other users);
+// submitLiquidationRequest finally arrives with receiptUrl lines only, so it does no Drive work at all.
+// The reservation lives in CacheService (6h) keyed by RequestID, bound to one employee, so uploadReceipt
+// can only write into a folder that was reserved for that same employee.
+var RESERVE_CID_CACHE_PREFIX_ = 'reserve_cid_';   // clientRequestId -> RequestID
+var RESERVATION_CACHE_PREFIX_ = 'reservation_';   // RequestID -> JSON { employeeId, folderId }
+var RESERVATION_TTL_SECONDS_ = 21600;             // CacheService max (6h)
+
+/** The cached reservation for a RequestID if it belongs to employeeId, else null. */
+function getReservation_(requestId, employeeId) {
+  var raw = CacheService.getScriptCache().get(RESERVATION_CACHE_PREFIX_ + requestId);
+  if (!raw) return null;
+  try {
+    var resv = JSON.parse(raw);
+    return String(resv.employeeId) === String(employeeId) ? resv : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function reserveRequestId(employeeId, clientRequestId) {
+  if (!clientRequestId) {
+    return { success: false, error: 'clientRequestId is required.' };
+  }
+  var employeeResult = getEmployeeByID(employeeId);
+  if (!employeeResult.found) {
+    return { success: false, error: 'Employee is invalid or inactive: ' + employeeResult.error };
+  }
+  var employee = employeeResult.employee;
+  var cache = CacheService.getScriptCache();
+  var cidKey = RESERVE_CID_CACHE_PREFIX_ + clientRequestId;
+
+  // Idempotent per clientRequestId: a retried reserve returns the SAME RequestID.
+  var requestId = cache.get(cidKey);
+  if (!requestId) {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(20000);
+    } catch (e) {
+      return { success: false, error: 'System is busy, please try again.' };
+    }
+    try {
+      requestId = cache.get(cidKey); // a concurrent retry may have won while we waited for the lock
+      if (!requestId) {
+        requestId = generateRequestId_(); // only this fast counter bump runs under the lock
+        cache.put(cidKey, requestId, RESERVATION_TTL_SECONDS_);
+      }
+    } finally {
+      lock.releaseLock();
+    }
+  }
+  timeStep_('reserveRequestId: id ready');
+
+  if (!getReservation_(requestId, employee.EmployeeID)) {
+    try {
+      var folder = ensureRequestFolder_(employee.EmployeeID, requestId); // created once, so parallel uploads never race
+      cache.put(RESERVATION_CACHE_PREFIX_ + requestId,
+        JSON.stringify({ employeeId: String(employee.EmployeeID), folderId: folder.getId() }), RESERVATION_TTL_SECONDS_);
+    } catch (e) {
+      cache.remove(cidKey); // let a retry start clean
+      return { success: false, error: 'Could not prepare the receipt folder: ' + e.message };
+    }
+  }
+  timeStep_('reserveRequestId: folder ready');
+  return { success: true, requestId: requestId };
+}
+
+// payload: { requestId, employeeId, lineIndex, file: { filename, mimeType, base64Data } } — one photo per call.
+function uploadReceipt(payload) {
+  if (!payload || !payload.requestId || !payload.file) {
+    return { success: false, error: 'Invalid upload request.' };
+  }
+  var resv = getReservation_(String(payload.requestId), payload.employeeId);
+  if (!resv) {
+    return { success: false, notReserved: true, error: 'This request ID was not reserved for this employee (or the reservation expired).' };
+  }
+  var lineIndex = Number(payload.lineIndex);
+  if (!isFinite(lineIndex) || lineIndex < 0 || lineIndex > 99 || Math.floor(lineIndex) !== lineIndex) {
+    return { success: false, error: 'Invalid line index.' };
+  }
+  var fileError = validateReceiptFile_(payload.file);
+  if (fileError) {
+    return { success: false, error: fileError };
+  }
+  try {
+    var folder = DriveApp.getFolderById(resv.folderId);
+    var url = uploadReceiptFileToFolder_(folder, generateLineId_(payload.requestId, lineIndex), payload.file);
+    timeStep_('uploadReceipt: done');
+    return { success: true, url: url };
+  } catch (e) {
+    return { success: false, error: 'Upload failed: ' + e.message };
   }
 }
 
@@ -423,66 +526,181 @@ function advanceRequestStage(requestId, targetStage, userId, password, remark) {
   timeStep_('advanceRequestStage: lock acquired');
 
   try {
-    var rowIndex = findRowIndexById_(SHEET_REQUESTS, 'RequestID', requestId);
-    if (rowIndex === -1) {
-      return { success: false, error: 'Request not found.' };
-    }
-
-    var requestRow = getRowObject_(SHEET_REQUESTS, rowIndex);
-    var currentStatus = requestRow['Status'];
-
-    var transitionError = validateStageTransition_(currentStatus, targetStage);
-    if (transitionError) {
-      return { success: false, error: transitionError };
-    }
-
-    var requiredRole = REQUIRED_ROLE_BY_STATUS[currentStatus];
-    if (approverResult.role !== requiredRole) {
-      return { success: false, error: 'This action requires the ' + requiredRole + ' role.' };
-    }
-
-    // Pending requests route to a specific approver based on the submitting
-    // employee's own category (Area Head/Technical/Audit each have one fixed
-    // approver; plain Staff route to their own store's Area Head) — see
-    // StoreDirectoryService.gs. If it can't be resolved (directory
-    // unreachable, or a Staff employee whose store isn't listed), this
-    // falls back to the role-only check already passed above.
-    if (currentStatus === STATUS_PENDING) {
-      var employeeId = requestRow['EmployeeID'];
-      var employeeInfo = getEmployeeRoutingInfo_(employeeId);
-      var lineLocation = getFirstLineBaseLocation_(requestId);
-      var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
-      if (required.found) {
-        var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
-        var requiredBioId = String(required.bioId || '').trim().toLowerCase();
-        if (!approverBioId || approverBioId !== requiredBioId) {
-          return { success: false, error: 'This request must be approved by ' + required.name + '.' };
-        }
-      }
-    }
-
-    var fieldNames = STAGE_FIELD_NAMES[targetStage];
-    var existingRemarks = requestRow['Remarks'];
-    var remarkLine = STAGE_DISPLAY_LABEL[targetStage] + ' by ' + actorName + (remark ? ': ' + remark : '');
-    var updatedRemarks = existingRemarks ? existingRemarks + '\n' + remarkLine : remarkLine;
-
-    var fields = { Status: targetStage, Remarks: updatedRemarks };
-    fields[fieldNames.by] = actorName;
-    fields[fieldNames.date] = new Date();
-
-    if (targetStage === STATUS_AUTHORIZED) {
-      fields['CreditingDate'] = computeNextCreditingFriday_();
-    }
-
-    updateRowFields_(SHEET_REQUESTS, rowIndex, fields);
+    var result = advanceOne_(requestId, targetStage, approverResult, remark, null);
     timeStep_('advanceRequestStage: done');
-
-    return { success: true };
+    return result;
   } catch (e) {
     return { success: false, error: 'Update failed: ' + e.message };
   } finally {
     lock.releaseLock();
   }
+}
+
+// Advances/rejects MANY requests in one call: credentials resolved once, the shared script lock taken
+// once, and Requests/RequestLines/Employees each read once — instead of N x (lock + several sheet
+// reads) when the client loops advanceRequestStage. Every request still goes through the exact same
+// per-request guards (advanceOne_), so the server remains the real enforcer of stage order, role and
+// Pending routing. A per-request failure never aborts the rest.
+var BATCH_ADVANCE_MAX_ = 25;
+
+function advanceRequestsBatch(requestIds, targetStage, userId, password, remark) {
+  if (!Array.isArray(requestIds) || !requestIds.length) {
+    return { success: false, error: 'No requests selected.' };
+  }
+  var seen = {};
+  var ids = [];
+  requestIds.forEach(function (id) {
+    var key = String(id);
+    if (!seen[key]) { seen[key] = true; ids.push(key); }
+  });
+  if (ids.length > BATCH_ADVANCE_MAX_) {
+    return { success: false, error: 'At most ' + BATCH_ADVANCE_MAX_ + ' requests can be processed per call.' };
+  }
+
+  var approverResult = getApproverByCredentials_(userId, password);
+  if (!approverResult.found) {
+    return { success: false, error: approverResult.error };
+  }
+  timeStep_('advanceRequestsBatch: approver resolved');
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (e) {
+    return { success: false, error: 'System is busy, please try again.' };
+  }
+  timeStep_('advanceRequestsBatch: lock acquired');
+
+  try {
+    // One read of Requests (rows are never deleted or moved, so index + 2 is the sheet row).
+    var requestsById = {};
+    getAllRowsAsObjects_(SHEET_REQUESTS, { fresh: true }).forEach(function (row, i) {
+      requestsById[String(row.RequestID)] = { rowIndex: i + 2, row: row };
+    });
+
+    var needsRouting = ids.some(function (id) {
+      return requestsById[id] && requestsById[id].row.Status === STATUS_PENDING;
+    });
+    var batchCtx = { requestsById: requestsById, employeesById: null, firstLineLocationByRequestId: null };
+    if (needsRouting) {
+      batchCtx.employeesById = {};
+      getAllRowsAsObjects_(SHEET_EMPLOYEES).forEach(function (emp) {
+        batchCtx.employeesById[String(emp.EmployeeID)] = emp;
+      });
+      // First matching row per RequestID wins = that request's first line item (lines are appended in order).
+      batchCtx.firstLineLocationByRequestId = {};
+      getAllRowsAsObjects_(SHEET_REQUEST_LINES).forEach(function (line) {
+        var rid = String(line.RequestID);
+        if (!(rid in batchCtx.firstLineLocationByRequestId)) {
+          batchCtx.firstLineLocationByRequestId[rid] = line.BaseLocation;
+        }
+      });
+    }
+    timeStep_('advanceRequestsBatch: data read');
+
+    var results = ids.map(function (id) {
+      var result;
+      try {
+        result = advanceOne_(id, targetStage, approverResult, remark, batchCtx);
+      } catch (e) {
+        result = { success: false, error: 'Update failed: ' + e.message };
+      }
+      result.requestId = id;
+      return result;
+    });
+    timeStep_('advanceRequestsBatch: done');
+    return { success: true, results: results };
+  } catch (e) {
+    return { success: false, error: 'Update failed: ' + e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Shared core of advanceRequestStage / advanceRequestsBatch — every guard lives here, once. Must be
+// called while holding the script lock. batchCtx is null for the single-request path (reads on demand);
+// the batch path passes pre-read lookups so nothing is re-read per request.
+function advanceOne_(requestId, targetStage, approverResult, remark, batchCtx) {
+  var actorName = approverResult.fullName;
+  var rowIndex;
+  var requestRow;
+  if (batchCtx) {
+    var found = batchCtx.requestsById[String(requestId)];
+    if (!found) {
+      return { success: false, error: 'Request not found.' };
+    }
+    rowIndex = found.rowIndex;
+    requestRow = found.row;
+  } else {
+    rowIndex = findRowIndexById_(SHEET_REQUESTS, 'RequestID', requestId);
+    if (rowIndex === -1) {
+      return { success: false, error: 'Request not found.' };
+    }
+    requestRow = getRowObject_(SHEET_REQUESTS, rowIndex);
+  }
+  var currentStatus = requestRow['Status'];
+
+  // Idempotent replay: the client's background queue may resend an action whose first attempt actually
+  // succeeded (response lost). If this request is already at the target stage AND that very same
+  // person did it, report success instead of "already ...". A different person's action is never masked.
+  var stageFields = STAGE_FIELD_NAMES[targetStage];
+  if (stageFields && currentStatus === targetStage && String(requestRow[stageFields.by]) === String(actorName)) {
+    return { success: true, alreadyApplied: true };
+  }
+
+  var transitionError = validateStageTransition_(currentStatus, targetStage);
+  if (transitionError) {
+    return { success: false, error: transitionError };
+  }
+
+  var requiredRole = REQUIRED_ROLE_BY_STATUS[currentStatus];
+  if (approverResult.role !== requiredRole) {
+    return { success: false, error: 'This action requires the ' + requiredRole + ' role.' };
+  }
+
+  // Pending requests route to a specific approver based on the submitting
+  // employee's own category (Area Head/Technical/Audit each have one fixed
+  // approver; plain Staff route to their own store's Area Head) — see
+  // StoreDirectoryService.gs. If it can't be resolved (directory
+  // unreachable, or a Staff employee whose store isn't listed), this
+  // falls back to the role-only check already passed above.
+  if (currentStatus === STATUS_PENDING) {
+    var employeeId = requestRow['EmployeeID'];
+    var employeeInfo;
+    var lineLocation;
+    if (batchCtx && batchCtx.employeesById) {
+      var emp = batchCtx.employeesById[String(employeeId)] || {};
+      employeeInfo = { baseLocation: emp.BaseLocation || '', department: emp.Department || '' };
+      lineLocation = batchCtx.firstLineLocationByRequestId[String(requestId)] || '';
+    } else {
+      employeeInfo = getEmployeeRoutingInfo_(employeeId);
+      lineLocation = getFirstLineBaseLocation_(requestId);
+    }
+    var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
+    if (required.found) {
+      var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
+      var requiredBioId = String(required.bioId || '').trim().toLowerCase();
+      if (!approverBioId || approverBioId !== requiredBioId) {
+        return { success: false, error: 'This request must be approved by ' + required.name + '.' };
+      }
+    }
+  }
+
+  var fieldNames = STAGE_FIELD_NAMES[targetStage];
+  var existingRemarks = requestRow['Remarks'];
+  var remarkLine = STAGE_DISPLAY_LABEL[targetStage] + ' by ' + actorName + (remark ? ': ' + remark : '');
+  var updatedRemarks = existingRemarks ? existingRemarks + '\n' + remarkLine : remarkLine;
+
+  var fields = { Status: targetStage, Remarks: updatedRemarks };
+  fields[fieldNames.by] = actorName;
+  fields[fieldNames.date] = new Date();
+
+  if (targetStage === STATUS_AUTHORIZED) {
+    fields['CreditingDate'] = computeNextCreditingFriday_();
+  }
+
+  updateRowFields_(SHEET_REQUESTS, rowIndex, fields);
+  return { success: true };
 }
 
 // Lets the Approver/Reviewer currently allowed to act on a request correct a

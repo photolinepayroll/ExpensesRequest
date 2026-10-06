@@ -8,3 +8,10 @@ Thumbs.db
 # real names/photo links. The live app fetches this data at runtime from
 # published Google Sheets, not from local copies.
 frontend/*.csv
+
+# Google service-account keys — never commit
+frontend/Dfiles/
+*.iam.gserviceaccount.com.json
+worker/.dev.vars
+worker/node_modules/
+worker/.wrangler/

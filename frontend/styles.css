@@ -900,3 +900,24 @@ tr.line-excluded td[data-label="Amount"] .excluded-reason { text-decoration: non
 table.data-table tr.line-detail-row { cursor: pointer; transition: background 100ms ease; }
 table.data-table tr.line-detail-row:hover { background: var(--color-surface); }
 table.data-table tr.line-detail-row:focus-visible { outline-offset: -2px; }
+
+/* ---- Outbox: requests saved locally and still being sent (outbox.js / employee.js) ---- */
+.outbox-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.outbox-item-failed { border-color: var(--color-danger); }
+.outbox-item-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); font-size: 0.9rem; }
+.outbox-state { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--color-muted-text); }
+.outbox-state-failed { color: var(--color-danger); }
+.outbox-actions { display: inline-flex; gap: var(--space-3); }
+.outbox-state .spinner { border-color: var(--color-border); border-top-color: var(--color-primary); }
+.msg-info { color: #1e3a8a; background: #eff6ff; border: 1px solid #bfdbfe; }

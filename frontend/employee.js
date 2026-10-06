@@ -16,6 +16,7 @@ function initEmployeeView() {
 
   $('btn-add-line').addEventListener('click', function () { addLineItemRow(); });
   $('btn-submit-request').addEventListener('click', handleSubmitRequest);
+  wireOutboxView_();
 }
 
 function handleEmployeeLookup() {
@@ -435,12 +436,16 @@ function updateRunningTotal() {
   $('running-total').textContent = formatCurrency(total);
 }
 
-function collectLineItems() {
+// Gathers the form into { lines, photos } for the outbox: lines carry no file data (a photo is referenced by
+// its line index), and every selected photo is compressed here (compressImageForUpload_) so what is saved
+// locally and later uploaded is already small. The upload itself happens in the background (outbox.js).
+function prepareSubmission_() {
   var rows = document.querySelectorAll('#line-items-container .line-item-row');
   var lines = [];
-  var fileReadPromises = [];
+  var photos = [];
+  var compressPromises = [];
 
-  rows.forEach(function (row) {
+  rows.forEach(function (row, index) {
     var category = row.querySelector('.li-category').value;
     var isTimesheet = category === 'Timesheet';
 
@@ -451,7 +456,6 @@ function collectLineItems() {
       amount: isTimesheet ? 0 : Number(row.querySelector('.li-amount').value),
       description: isTimesheet ? '' : row.querySelector('.li-description').value.trim(),
       cutoffEndDate: isTimesheet ? row.querySelector('.li-cutoffEndDate').value : '',
-      file: null,
       receiptUrl: row.dataset.receiptUrl || '',
       gpsMapLink: row.dataset.gpsMapLink || ''
     };
@@ -464,16 +468,19 @@ function collectLineItems() {
         if (file.size > 5 * 1024 * 1024) {
           throw new Error('Receipt file "' + file.name + '" exceeds 5MB.');
         }
-        fileReadPromises.push(
-          compressImageForUpload_(file)
-            .then(function (compressed) { return readFileAsBase64(compressed); })
-            .then(function (encoded) { line.file = encoded; })
+        compressPromises.push(
+          compressImageForUpload_(file).then(function (compressed) {
+            photos.push({ lineIndex: index, file: compressed });
+          })
         );
       }
     }
   });
 
-  return Promise.all(fileReadPromises).then(function () { return lines; });
+  return Promise.all(compressPromises).then(function () {
+    photos.sort(function (a, b) { return a.lineIndex - b.lineIndex; });
+    return { lines: lines, photos: photos };
+  });
 }
 
 // Re-encodes a receipt photo down toward ~1MB before it's uploaded to Drive,
@@ -632,54 +639,29 @@ function proceedWithSubmit_(errorEl, successEl) {
   var submitBtn = $('btn-submit-request');
   var submitLabel = $('submit-btn-label');
   submitBtn.disabled = true;
-  submitLabel.innerHTML = '<span class="spinner" aria-hidden="true"></span> Submitting...';
+  submitLabel.innerHTML = '<span class="spinner" aria-hidden="true"></span> Preparing...';
 
   function resetSubmitButton() {
     submitBtn.disabled = false;
     submitLabel.textContent = 'Submit Request';
   }
 
-  var submittedLines;
-  // Generated once per submit click and reused across every automatic
-  // network/busy retry of this same attempt, so a slow request that the
-  // client times out and retries (while the server is still or already
-  // finished processing it) doesn't create multiple duplicate requests.
-  var clientRequestId = generateClientRequestId_();
-
+  // Compress the photos, save everything to the local outbox, and hand over to the background sender
+  // (outbox.js). From the employee's point of view the request is submitted as soon as it is safely saved:
+  // the uploads and the server write continue in the background and survive a refresh or dropped signal.
+  // The server stays authoritative — it re-validates everything (including the Thu/Fri window) when the
+  // request actually arrives, and a rejection shows up on the request's card with Retry/Discard.
   Promise.resolve()
-    .then(collectLineItems)
-    .then(function (lines) {
-      submittedLines = lines;
-      return runServer('submitLiquidationRequest', {
-        employeeId: currentEmployee.EmployeeID,
-        employeeName: currentEmployee.Name,
-        lines: lines,
-        clientRequestId: clientRequestId
-      });
+    .then(prepareSubmission_)
+    .then(function (prepared) {
+      outboxNotice_ = '';
+      return outboxEnqueue_(currentEmployee, prepared.lines, prepared.photos);
     })
-    .then(function (result) {
+    .then(function () {
       resetSubmitButton();
-      if (!result.success) {
-        // A "busy" failure means the server gave up waiting for a slow
-        // original submission — it may still be processing. The backend now
-        // also has a content-based fallback that coalesces a resubmit of the
-        // same data into the original request, but that only helps once the
-        // resubmit actually happens; steer the user to check first rather
-        // than implying a bare retry is the only option.
-        var message = /busy/i.test(result.error || '')
-          ? 'Your submission may still be processing — please check My Requests before submitting again.'
-          : result.error;
-        setMessage(errorEl, message, true);
-        return;
-      }
-      setMessage(successEl, 'Request ' + result.requestId + ' submitted successfully.', false);
+      setMessage(successEl, 'Request submitted — it is being sent in the background.', false);
       resetLineItems();
-      // Optimistically add the new request to the CSV-based cache before
-      // switching tabs — the published CSV can lag several minutes behind
-      // the live sheet, so without this the just-submitted request would
-      // silently be missing from My Requests until that catches up.
-      patchCachedNewRequest_(result.requestId, currentEmployee.EmployeeID, currentEmployee.Name, submittedLines)
-        .then(function () { setEmployeeTab('my-requests'); });
+      setEmployeeTab('my-requests');
     })
     .catch(function (err) {
       resetSubmitButton();
@@ -687,9 +669,73 @@ function proceedWithSubmit_(errorEl, successEl) {
     });
 }
 
+// ---- Outbox display (requests saved locally and still being sent — see outbox.js) ----
+
+var outboxNotice_ = ''; // "Request REQ#... submitted" confirmation, shown above the pending cards
+
+function outboxStatusHtml_(item) {
+  var p = outboxProgress_(item);
+  if (item.state === 'failed') {
+    return '<span class="outbox-state outbox-state-failed">Not sent: ' + escapeHtml_(item.error || 'unknown error') + '</span>' +
+      '<span class="outbox-actions">' +
+      '<button type="button" class="btn-link" data-outbox-action="retry" data-id="' + escapeHtml_(item.id) + '">Retry</button>' +
+      '<button type="button" class="btn-link" data-outbox-action="discard" data-id="' + escapeHtml_(item.id) + '">Discard</button>' +
+      '</span>';
+  }
+  if (item.state === 'retrying') {
+    return '<span class="outbox-state"><span class="spinner" aria-hidden="true"></span> Waiting to retry — ' +
+      escapeHtml_(item.error || 'connection problem') + '</span>';
+  }
+  var photoText = p.total ? ' — photos ' + p.done + ' / ' + p.total : '';
+  return '<span class="outbox-state"><span class="spinner" aria-hidden="true"></span> Sending' + photoText + '...</span>';
+}
+
+function renderOutbox_() {
+  var container = $('outbox-container');
+  if (!container) return;
+
+  // Confirmations for requests that just finished (drained once; they are now in the real list too).
+  var finished = outboxCompleted_.splice(0).filter(function (c) {
+    return currentEmployee && String(c.employeeId) === String(currentEmployee.EmployeeID);
+  });
+  if (finished.length) {
+    outboxNotice_ = 'Request ' + finished.map(function (c) { return c.requestId; }).join(', ') + ' submitted successfully.';
+    var myTab = $('view-my-requests');
+    if (myTab && !myTab.classList.contains('hidden')) loadMyRequests();
+  }
+
+  var items = currentEmployee ? outboxItemsFor_(currentEmployee.EmployeeID) : [];
+  var html = '';
+  if (outboxNotice_) {
+    html += '<div class="msg msg-success" role="status">' + MSG_ICON_SUCCESS + '<span>' + escapeHtml_(outboxNotice_) + '</span></div>';
+  }
+  items.forEach(function (item) {
+    var total = item.lines.reduce(function (sum, l) { return sum + (Number(l.amount) || 0); }, 0);
+    html += '<div class="outbox-item' + (item.state === 'failed' ? ' outbox-item-failed' : '') + '">' +
+      '<div class="outbox-item-main"><strong>New request</strong> &middot; ' + item.lines.length + ' line' +
+      (item.lines.length === 1 ? '' : 's') + ' &middot; ' + formatCurrency(total) + '</div>' +
+      '<div class="outbox-item-status">' + outboxStatusHtml_(item) + '</div></div>';
+  });
+  container.innerHTML = html;
+}
+
+function wireOutboxView_() {
+  var container = $('outbox-container');
+  if (!container) return;
+  container.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-outbox-action]') : null;
+    if (!btn) return;
+    if (btn.getAttribute('data-outbox-action') === 'retry') outboxRetry_(btn.getAttribute('data-id'));
+    else if (btn.getAttribute('data-outbox-action') === 'discard') outboxDiscard_(btn.getAttribute('data-id'));
+  });
+  outboxSubscribe_(renderOutbox_);
+  outboxInit_(); // reload anything saved by a previous visit and resume sending it
+}
+
 // ---- My Requests ----
 
 function loadMyRequests() {
+  renderOutbox_();
   var container = $('my-requests-table-container');
   container.innerHTML = '<div class="state-message"><span class="spinner" aria-hidden="true" style="border-color:#e4e7eb;border-top-color:#1e3a5f;"></span><p>Loading your requests...</p></div>';
   loadJoinedRequests_()

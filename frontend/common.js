@@ -675,6 +675,27 @@ function patchCachedRequestStage_(requestId, targetStage, actorName) {
   }
 }
 
+// Optimistic approvals (admin.js's background queue): before patchCachedRequestStage_ changes a row, the
+// whole row is snapshotted so that, if the server later refuses the action, restoreCachedRequest_ can put
+// the request back exactly as it was and the approver sees it in the list again.
+function snapshotCachedRequest_(requestId) {
+  if (!requestsCsvCache) return null;
+  var row = requestsCsvCache.filter(function (r) { return String(r.RequestID) === String(requestId); })[0];
+  if (!row) return null;
+  var copy = {};
+  Object.keys(row).forEach(function (k) { copy[k] = row[k]; });
+  return copy;
+}
+
+function restoreCachedRequest_(snapshot) {
+  if (!snapshot || !requestsCsvCache) return;
+  var row = requestsCsvCache.filter(function (r) { return String(r.RequestID) === String(snapshot.RequestID); })[0];
+  if (!row) return;
+  Object.keys(snapshot).forEach(function (k) { row[k] = snapshot[k]; });
+  // Fields the optimistic patch ADDED (e.g. ApprovedBy on a row that had none) must go too.
+  Object.keys(row).forEach(function (k) { if (!(k in snapshot)) delete row[k]; });
+}
+
 // Called right after updateLineItemAmount succeeds — patches the specific
 // line's Amount and recomputes the request's TotalAmount from scratch (not
 // a delta, matching the server's own re-sum-everything approach), same

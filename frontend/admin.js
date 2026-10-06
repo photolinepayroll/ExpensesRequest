@@ -490,36 +490,150 @@ function wireAdminActions_(panel, requestId, nextAction) {
 
     var remarks = actionsEl.querySelector('.admin-remarks').value.trim();
 
-    var originalLabel = triggeringBtn.querySelector('span').textContent;
-    triggeringBtn.querySelector('span').textContent = 'Processing...';
-    actionsEl.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-
-    function reEnable() {
-      triggeringBtn.querySelector('span').textContent = originalLabel;
-      actionsEl.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
-    }
-
-    runServer('advanceRequestStage', requestId, targetStage, currentApprover.userId, currentApprover.password, remarks)
-      .then(function (result) {
-        if (!result.success) {
-          currentApprover.password = null; // can't tell if it was the password that was wrong — re-prompt next time
-          setMessage(errorEl, result.error, true);
-          reEnable();
-          return;
-        }
-        patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
-        refreshAdminActiveTab_();
-      })
-      .catch(function (err) {
-        currentApprover.password = null;
-        setMessage(errorEl, err.message, true);
-        reEnable();
-      });
+    // Optimistic: the request leaves this list immediately and the action is sent in the background
+    // (see the approval queue below). If the server refuses it, the request comes back with the reason.
+    enqueueApproverActions_([requestId], targetStage, remarks);
+    refreshAdminActiveTab_();
   }
 
   advanceBtn.addEventListener('click', function () { process(nextAction.targetStage, advanceBtn); });
   rejectBtn.addEventListener('click', function () { process('Rejected', rejectBtn); });
 }
+
+// ---- Background approval queue ----
+// Approve/Reject (single or bulk) never makes the approver wait: the cached request is patched at once
+// (so it disappears from the list), and the actual server call runs here, one batch at a time. Consecutive
+// queued items with the same target stage + remark go out together in ONE advanceRequestsBatch call.
+// Failures are never silent: the request is restored in the list and the reason is shown in the banner.
+// The password is never persisted, so a page reload cannot resume an unsent queue — the banner says so and
+// the browser warns before closing while something is still being sent.
+
+var APPROVER_QUEUE_BATCH_MAX = 25; // keep in step with BATCH_ADVANCE_MAX_ in RequestService.gs
+var APPROVER_QUEUE_RETRY_DELAYS_MS = [2000, 5000, 15000, 30000];
+var approverQueue_ = [];          // [{ requestId, targetStage, remark, snapshot }]
+var approverQueueRunning_ = false;
+var approverQueueAttempts_ = 0;
+var approverQueueIssues_ = [];    // persistent failure lines shown in the banner until dismissed
+
+function enqueueApproverActions_(requestIds, targetStage, remark) {
+  requestIds.forEach(function (requestId) {
+    var snapshot = snapshotCachedRequest_(requestId);
+    patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
+    approverQueue_.push({ requestId: requestId, targetStage: targetStage, remark: remark || '', snapshot: snapshot });
+  });
+  renderApproverQueueStatus_();
+  runApproverQueue_();
+}
+
+// Puts requests back in the list exactly as they were and records why.
+function failApproverItems_(items, reason) {
+  items.forEach(function (item) {
+    restoreCachedRequest_(item.snapshot);
+    approverQueueIssues_.push(item.requestId + ': ' + reason);
+  });
+  approverQueue_ = approverQueue_.filter(function (q) { return items.indexOf(q) === -1; });
+}
+
+function renderApproverQueueStatus_() {
+  var el = $('approver-queue-status');
+  if (!el) return;
+  var html = '';
+  if (approverQueue_.length) {
+    html += '<div class="msg msg-info" role="status"><span><span class="spinner" aria-hidden="true"></span> Sending ' +
+      approverQueue_.length + ' approval' + (approverQueue_.length === 1 ? '' : 's') +
+      ' in the background — keep this page open until it finishes.</span></div>';
+  }
+  if (approverQueueIssues_.length) {
+    html += '<div class="msg msg-error" role="alert">' + MSG_ICON_ERROR + '<span>' +
+      escapeHtml_(approverQueueIssues_.length + ' not processed (put back in the list): ' + approverQueueIssues_.join('; ')) +
+      ' <button type="button" class="btn-link" id="btn-dismiss-approver-issues">Dismiss</button></span></div>';
+  }
+  el.innerHTML = html;
+  var dismiss = $('btn-dismiss-approver-issues');
+  if (dismiss) dismiss.addEventListener('click', function () { approverQueueIssues_ = []; renderApproverQueueStatus_(); });
+}
+
+function runApproverQueue_() {
+  if (approverQueueRunning_ || !approverQueue_.length) return;
+  approverQueueRunning_ = true;
+
+  function finish(hadFailures) {
+    approverQueueRunning_ = false;
+    approverQueueAttempts_ = 0;
+    renderApproverQueueStatus_();
+    if (hadFailures) refreshAdminActiveTab_(); // restored requests reappear
+    if (approverQueue_.length) runApproverQueue_();
+  }
+
+  function step() {
+    if (!approverQueue_.length) { finish(false); return; }
+    var first = approverQueue_[0];
+    var batch = approverQueue_.filter(function (q) {
+      return q.targetStage === first.targetStage && q.remark === first.remark;
+    }).slice(0, APPROVER_QUEUE_BATCH_MAX);
+
+    if (!currentApprover || !ensureApproverPassword_()) {
+      failApproverItems_(approverQueue_.slice(), 'password not entered, nothing was sent');
+      finish(true);
+      return;
+    }
+
+    function retryOrGiveUp(message) {
+      approverQueueAttempts_ += 1;
+      if (approverQueueAttempts_ >= APPROVER_QUEUE_RETRY_DELAYS_MS.length + 1) {
+        failApproverItems_(batch, message + ' — not sent');
+        finish(true);
+        return;
+      }
+      renderApproverQueueStatus_();
+      setTimeout(step, APPROVER_QUEUE_RETRY_DELAYS_MS[approverQueueAttempts_ - 1]);
+    }
+
+    runServer('advanceRequestsBatch', batch.map(function (q) { return q.requestId; }),
+        first.targetStage, currentApprover.userId, currentApprover.password, first.remark)
+      .then(function (result) {
+        if (!result.success) {
+          if (/busy/i.test(result.error || '')) { retryOrGiveUp('server busy'); return; }
+          // Credentials/other whole-call refusal — nothing in this batch was applied.
+          currentApprover.password = null; // can't tell if it was the password — re-prompt next time
+          failApproverItems_(batch, result.error || 'refused by the server');
+          finish(true);
+          return;
+        }
+        approverQueueAttempts_ = 0;
+        var failed = [];
+        (result.results || []).forEach(function (r) {
+          var item = batch.filter(function (q) { return String(q.requestId) === String(r.requestId); })[0];
+          if (!item) return;
+          if (r.success) {
+            approverQueue_ = approverQueue_.filter(function (q) { return q !== item; });
+          } else {
+            failApproverItems_([item], r.error || 'refused by the server');
+            failed.push(item);
+          }
+        });
+        // Anything the server did not report on stays queued only if it was never in the response.
+        var unanswered = batch.filter(function (q) { return approverQueue_.indexOf(q) !== -1; });
+        if (unanswered.length) failApproverItems_(unanswered, 'no answer from the server — check the request before retrying');
+        if (failed.length || unanswered.length) currentApprover.password = null;
+        renderApproverQueueStatus_();
+        if (failed.length || unanswered.length) refreshAdminActiveTab_();
+        step();
+      })
+      .catch(function (err) {
+        retryOrGiveUp(err.message || 'connection problem');
+      });
+  }
+
+  step();
+}
+
+window.addEventListener('beforeunload', function (e) {
+  if (approverQueue_.length) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 // ---- Bulk select/advance (factory reused by the queue tab's Approved-bulk
 // and the history tab's Reviewed-bulk — same UI/flow, different element ids,
@@ -584,37 +698,13 @@ function makeBulkController_(ids, refresh) {
     if (!ensureApproverPassword_()) return; // cancelled
 
     var remarks = $(ids.remarks).value.trim();
-    activeBtn.disabled = true;
-    otherBtn.disabled = true;
-    $(ids.label).textContent = 'Processing...';
 
-    var failures = [];
-
-    // Sequential, not Promise.all — avoids hammering Apps Script/LockService
-    // with concurrent calls, and keeps per-request error attribution simple.
-    selectedIds.reduce(function (chain, requestId) {
-      return chain.then(function () {
-        return runServer('advanceRequestStage', requestId, targetStage, currentApprover.userId, currentApprover.password, remarks)
-          .then(function (result) {
-            if (!result.success) {
-              failures.push(requestId + ': ' + result.error);
-              return;
-            }
-            patchCachedRequestStage_(requestId, targetStage, currentApprover.fullName);
-          })
-          .catch(function (err) {
-            failures.push(requestId + ': ' + err.message);
-          });
-      });
-    }, Promise.resolve())
-      .then(function () {
-        var succeeded = selectedIds.length - failures.length;
-        if (failures.length) {
-          currentApprover.password = null; // can't tell if a stale password caused a failure — re-prompt next time
-          setMessage(errorEl, succeeded + ' processed, ' + failures.length + ' failed: ' + failures.join('; '), true);
-        }
-        refresh();
-      });
+    // Optimistic + batched: all selected requests leave the list at once and are sent in the background in
+    // as few server calls as possible (advanceRequestsBatch takes the shared lock once per batch of up to
+    // 25 instead of once per request). Anything the server refuses reappears with its reason.
+    enqueueApproverActions_(selectedIds, targetStage, remarks);
+    $(ids.remarks).value = '';
+    refresh();
   }
 
   function handleClick() {

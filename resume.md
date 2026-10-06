@@ -1190,3 +1190,25 @@ for the exact done/not-done breakdown, summarized here:**
       1.6km -> regional, covered branch within 5km -> override, nearest wins with MB first or last,
       non-assigned employee -> regional) all passed. **Not yet checked in a real browser** or against live
       BIO 373/470 data.
+
+42. **Cloudflare Worker migration: explored, then cancelled.** User asked whether Apps Script could be replaced by
+    the Google Sheets API behind a free server (Cloudflare Workers + Durable Object lock, Sheets stays the
+    database). Built and deployed a prototype (read actions, login, mutations, submit/dedupe, a test copy of the
+    spreadsheet); outputs matched live Apps Script and were 3-5x faster. Found that the Sheets API allows only
+    ~60 reads and ~60 writes per minute per service account (batched every mutation to 1 read + 1 write), that
+    dates must be written as `M/d/yyyy H:mm:ss` text to display like Apps Script's (Safari can't parse ISO with a
+    space), and a service account could not yet be proven able to upload receipts (Drive folder never shared).
+    User then cancelled and asked to return to the previous state: both Workers deleted, `worker/` and the
+    service-account key file removed locally. Still for the user to do: revoke the key in Google Cloud and delete
+    the `TEST COPY` spreadsheet. Only `.gitignore` gained lines that keep `frontend/Dfiles/` out of git.
+
+43. **Faster Submit/Approve inside Apps Script (see CLAUDE.md item 42 for the full design).** Backend deployed
+    `@43`: `reserveRequestId`, `uploadReceipt` (one photo per call, no lock), `advanceRequestsBatch` (one lock,
+    one read, shared `advanceOne_` guards), idempotent replay (`alreadyApplied`), submit accepts a reserved
+    `requestId`. Frontend (not yet pushed): `outbox.js` (IndexedDB outbox, background reserve -> parallel photo
+    uploads -> submit, resumes after refresh, Retry/Discard on failure), `employee.js` (Submit saves locally and
+    jumps to My Requests; pending cards), `admin.js` (optimistic Approve/Reject + background batch queue with
+    restore-on-failure banner). Verified with Node harnesses (32 backend, 14 outbox + IndexedDB resume, 13
+    approver-queue checks) and the real pages in jsdom; **not yet checked in a real browser or phone, and no
+    real timings yet**. Next: commit + push the frontend (GitHub Pages) so users get it, then a real-browser
+    pass (11-photo submit, throttled network, refresh mid-upload, bulk approve ~10, failure paths).

@@ -1020,6 +1020,67 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       non-assigned employee -> regional) all passed. **Not yet checked in a real browser** or against live
       BIO 373/470 data.
 
+42. **Faster Submit and Approve: reserve-then-upload, local outbox, background approval queue, batch advance.**
+    Users still saw lag on Submit (every Drive upload ran inside one long request, the usual cause of "System
+    is busy" and duplicates) and on Approve/Reject (wait for the lock + Sheet writes; bulk = N sequential round
+    trips). Two layers: make the real work cheaper, and hide the remaining wait. **Backend deployed `@43`; the
+    frontend is NOT live until it is committed and pushed to GitHub Pages.** No schema change, `setupSheets()`
+    not needed. Backend is backward compatible (old frontend keeps working).
+    - **Backend** (`RequestService.gs`, `DriveService.gs`, `Code.gs`): `reserveRequestId(employeeId,
+      clientRequestId)` — idempotent per click via `CacheService`, bumps the sequential counter under a *short*
+      lock, pre-creates the `<EmployeeID>/<RequestID>/` Drive folder once (`ensureRequestFolder_`) and caches
+      `{employeeId, folderId}` for 6h. `uploadReceipt({requestId, employeeId, lineIndex, file})` — **no lock**,
+      one photo per call, only into a folder reserved for that same employee, idempotent per (folder, line,
+      filename) via `uploadReceiptFileToFolder_` (a retried photo returns the existing file's URL).
+      `submitLiquidationRequest` accepts an optional `payload.requestId` (must match the employee's
+      reservation) and then does no Drive work. `advanceRequestsBatch(requestIds, targetStage, userId,
+      password, remark)` — up to 25 ids, credentials resolved once, lock taken once, Requests/RequestLines/
+      Employees each read once; every request still goes through the same guards because
+      `advanceRequestStage` and the batch share one core, `advanceOne_` (stage order, role, Pending routing).
+      **Idempotent replay**: if a request is already at the target stage *and that stage's `*By` equals the same
+      resolved actor*, `advanceOne_` returns `{success:true, alreadyApplied:true}` (so a queued retry after a lost
+      response isn't an error; another person's action is never masked).
+    - **Employee outbox** (`frontend/outbox.js`, new; `employee.js`; `index.html`; `styles.css`): Submit now
+      compresses the photos, saves `{lines, photos (Blobs)}` to IndexedDB, clears the form and jumps straight to
+      My Requests. A background runner sends one request at a time: reserve -> upload photos (3 in parallel,
+      skipping ones already uploaded) -> submit with `receiptUrl`s only. Every step is persisted, so a refresh
+      or lost signal resumes where it stopped (a request with no photos skips reserve/upload). Network/busy
+      errors back off (3s...180s, 10 tries) then stop with a Retry button; a real server rejection (validation,
+      Thu/Fri window) marks the card **failed** with the reason + Retry/Discard and is never auto-resent. An
+      expired reservation (`notReserved`) restarts from reserve. `navigator.locks` keeps two tabs from driving
+      the same items; with no IndexedDB (private mode) it falls back to memory plus a `beforeunload` warning.
+      My Requests shows the pending cards above the table (`renderOutbox_`); on success the existing
+      `patchCachedNewRequest_` adds the real row. `collectLineItems()` was replaced by `prepareSubmission_()`
+      (no base64 any more).
+    - **Approver background queue** (`admin.js`, `common.js`, `admin.html`): Approve/Reject (single and bulk)
+      snapshot the cached row (`snapshotCachedRequest_`), patch it immediately (the request leaves the list) and
+      enqueue; `runApproverQueue_` sends queued items one batch at a time, coalescing items with the same stage +
+      remark into one `advanceRequestsBatch` call (clicks made while a call is in flight pile up and share the
+      next one; cap 25). Network/busy errors retry (2s/5s/15s/30s, 5 tries); a refusal restores the row
+      (`restoreCachedRequest_`, incl. removing fields the patch added) and shows the reason in
+      `#approver-queue-status` until dismissed. **The password is still never persisted**, so a reload cannot
+      resume an unsent queue — the banner says to keep the page open and `beforeunload` warns. Save Amount and
+      Not-included stay synchronous.
+    - **Verified** (Node, not a real browser): the real `.gs` files in a `vm` with in-memory Sheet/Drive/Cache/
+      Lock fakes — 32 checks (reserve idempotent and race-free, upload refused for an unreserved id or another
+      employee, duplicate-free retried photos, batch results and resulting sheet identical to N sequential
+      `advanceRequestStage` calls, lock taken once, routing guard inside the batch, replay semantics, 25 cap);
+      outbox pipeline (14 checks) and a fake-IndexedDB refresh/resume test; approver queue (13 checks); the real
+      `index.html`/`admin.html` in jsdom (submit click lands on My Requests at once, pending card with photo
+      progress, completion message, failed card with Retry/Discard, no script errors). Live smoke on `@43`
+      (non-writing calls) passed.
+    - **Not yet checked**: a real browser/phone (iOS Safari IndexedDB Blob storage, throttled network, refresh
+      mid-upload), real multi-user lock contention, and actual before/after timings — read the `[timing]` lines
+      (`reserveRequestId`, `uploadReceipt`, `advanceRequestsBatch`) in the Apps Script Executions log.
+      Known trade-offs: an abandoned reservation leaves a gap in `REQ#` numbers (as a failed submit always could);
+      the reservation lives in `CacheService` (6h) so a very old queued item re-reserves under a new id.
+    - **Considered and rejected (2026-10-06/07)**: moving the API off Apps Script to a Cloudflare Worker calling
+      the Google Sheets REST API. Prototyped through reads, mutations and submit (outputs matched Apps Script on
+      the real sheet), but Google limits the Sheets API to roughly **60 reads and 60 writes per minute per
+      service account** (not the 300/min per project), which forced every mutation down to 1 read + 1 write,
+      and Drive uploads from a service account were never proven. Cancelled by the user; the Worker, its
+      deployments and the service-account key were deleted. Don't restart it without discussing that quota.
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.
