@@ -1023,8 +1023,8 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
 42. **Faster Submit and Approve: reserve-then-upload, local outbox, background approval queue, batch advance.**
     Users still saw lag on Submit (every Drive upload ran inside one long request, the usual cause of "System
     is busy" and duplicates) and on Approve/Reject (wait for the lock + Sheet writes; bulk = N sequential round
-    trips). Two layers: make the real work cheaper, and hide the remaining wait. **Backend deployed `@43`; the
-    frontend is NOT live until it is committed and pushed to GitHub Pages.** No schema change, `setupSheets()`
+    trips). Two layers: make the real work cheaper, and hide the remaining wait. **Backend deployed `@43`; frontend
+    committed and pushed to `main` (`d95cb62`, GitHub Pages) and confirmed working by the user in a local run.** No schema change, `setupSheets()`
     not needed. Backend is backward compatible (old frontend keeps working).
     - **Backend** (`RequestService.gs`, `DriveService.gs`, `Code.gs`): `reserveRequestId(employeeId,
       clientRequestId)` — idempotent per click via `CacheService`, bumps the sequential counter under a *short*
@@ -1069,8 +1069,9 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       `index.html`/`admin.html` in jsdom (submit click lands on My Requests at once, pending card with photo
       progress, completion message, failed card with Retry/Discard, no script errors). Live smoke on `@43`
       (non-writing calls) passed.
-    - **Not yet checked**: a real browser/phone (iOS Safari IndexedDB Blob storage, throttled network, refresh
-      mid-upload), real multi-user lock contention, and actual before/after timings — read the `[timing]` lines
+    - **Confirmed by the user**: a local run of the real pages against the live backend worked. **Not yet
+      checked**: a phone (iOS Safari IndexedDB Blob storage, throttled network, refresh mid-upload), real
+      multi-user lock contention, and actual before/after timings — read the `[timing]` lines
       (`reserveRequestId`, `uploadReceipt`, `advanceRequestsBatch`) in the Apps Script Executions log.
       Known trade-offs: an abandoned reservation leaves a gap in `REQ#` numbers (as a failed submit always could);
       the reservation lives in `CacheService` (6h) so a very old queued item re-reserves under a new id.
@@ -1079,7 +1080,8 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       the real sheet), but Google limits the Sheets API to roughly **60 reads and 60 writes per minute per
       service account** (not the 300/min per project), which forced every mutation down to 1 read + 1 write,
       and Drive uploads from a service account were never proven. Cancelled by the user; the Worker, its
-      deployments and the service-account key were deleted. Don't restart it without discussing that quota.
+      deployments, the service-account key (revoked in Google Cloud) and the test spreadsheet copy were all
+      deleted. Don't restart it without discussing that quota.
 
 ## Security model (intentional, not an oversight)
 

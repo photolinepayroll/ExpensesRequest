@@ -1199,16 +1199,20 @@ for the exact done/not-done breakdown, summarized here:**
     dates must be written as `M/d/yyyy H:mm:ss` text to display like Apps Script's (Safari can't parse ISO with a
     space), and a service account could not yet be proven able to upload receipts (Drive folder never shared).
     User then cancelled and asked to return to the previous state: both Workers deleted, `worker/` and the
-    service-account key file removed locally. Still for the user to do: revoke the key in Google Cloud and delete
-    the `TEST COPY` spreadsheet. Only `.gitignore` gained lines that keep `frontend/Dfiles/` out of git.
+    service-account key file removed locally. The user then revoked the key in Google Cloud and deleted the
+    `TEST COPY` spreadsheet, so nothing from the attempt remains except an empty `photoline-expenses.workers.dev`
+    subdomain and the Google Cloud project with Sheets/Drive APIs enabled. Only `.gitignore` gained lines that
+    keep `frontend/Dfiles/` out of git.
 
 43. **Faster Submit/Approve inside Apps Script (see CLAUDE.md item 42 for the full design).** Backend deployed
     `@43`: `reserveRequestId`, `uploadReceipt` (one photo per call, no lock), `advanceRequestsBatch` (one lock,
     one read, shared `advanceOne_` guards), idempotent replay (`alreadyApplied`), submit accepts a reserved
-    `requestId`. Frontend (not yet pushed): `outbox.js` (IndexedDB outbox, background reserve -> parallel photo
+    `requestId`. Frontend (committed + pushed to `main` as `d95cb62`): `outbox.js` (IndexedDB outbox, background reserve -> parallel photo
     uploads -> submit, resumes after refresh, Retry/Discard on failure), `employee.js` (Submit saves locally and
     jumps to My Requests; pending cards), `admin.js` (optimistic Approve/Reject + background batch queue with
     restore-on-failure banner). Verified with Node harnesses (32 backend, 14 outbox + IndexedDB resume, 13
-    approver-queue checks) and the real pages in jsdom; **not yet checked in a real browser or phone, and no
-    real timings yet**. Next: commit + push the frontend (GitHub Pages) so users get it, then a real-browser
-    pass (11-photo submit, throttled network, refresh mid-upload, bulk approve ~10, failure paths).
+    approver-queue checks) and the real pages in jsdom; the user ran it locally against the live backend and
+    **confirmed it works**; **not yet checked on a phone (iOS Safari) or under real multi-user load, and no real
+    timings yet**. Next: watch the `[timing]` lines in the Apps Script Executions log, and do a phone pass
+    (11-photo submit, weak signal, refresh mid-upload, bulk approve ~10, failure paths). The three duplicate
+    requests REQ#000227/204/205 (item 38) are still Pending for the user to reject in `admin.html`.
