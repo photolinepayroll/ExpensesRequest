@@ -1093,6 +1093,17 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
     after the push; if it still shows 200, get the End OUT lat/lon for 2026-10-09 and check radius and the sheet's
     `BIO`/`Meal Alowance` header-keyed columns for that row.
 
+44. **Area Head requests can also be approved by the ADMIN account.** The store-directory sheet now lists ADMIN
+    (BIO 9999) as a second approver for Area Heads. `resolveRequiredApprover_` (`StoreDirectoryService.gs`, mirrored
+    in `frontend/common.js`) returns `bioIds: [Jayriel, ADMIN]` for the `AreaHead` category (name "Jayriel ... or
+    ADMIN" for error messages); new `approverMatchesRequired_(required, bioId)` (both runtimes) replaces the
+    single-ID comparisons in `RequestService.gs` (queue read scope, `advanceOne_`/advance, `authorizeLineEdit_`) and
+    `admin.js`'s queue filter. ADMIN is read from the existing `STORE_DIR_COL_ADMIN_BIO/NAME` (cols 28/29), so no
+    hardcoded ID. Other categories (Technical/Audit/HeadOffice/Staff) are unchanged. The ADMIN row in the `Approvers`
+    sheet needs Role `Approver`, Active, and `BiometricID` 9999 for this to work. **Backend change: needs
+    `clasp push -f` + `clasp deploy -i` (not run from this session)**; frontend is live on push. Verified with
+    syntax checks only, not live data.
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.

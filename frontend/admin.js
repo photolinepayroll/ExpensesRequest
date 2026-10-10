@@ -245,7 +245,7 @@ function loadAdminRequests() {
           );
           // Fail open (routing.found === false) shows the request to
           // everyone, same fallback philosophy as the server.
-          if (routing.found && String(routing.bioId) !== String(currentApprover.biometricId)) return false;
+          if (routing.found && !approverMatchesRequired_(routing, currentApprover.biometricId)) return false;
         }
         return true;
       });

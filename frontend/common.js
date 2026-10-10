@@ -568,13 +568,35 @@ function findStoreRowByName_(rows, locationText) {
 // unreachable, or a Staff employee's location matches no listed store) —
 // callers should treat that the same way the backend does: fail open, show
 // the request rather than hide it.
+// True when approverBioId is allowed to act on a request whose
+// resolveRequiredApprover_ result is `required` (found:true). Most categories
+// have one approver (bioId); Area Head requests also accept ADMIN (bioIds).
+function approverMatchesRequired_(required, approverBioId) {
+  var want = String(approverBioId || '').trim().toLowerCase();
+  if (!want) return false;
+  var ids = required.bioIds || [required.bioId];
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i] || '').trim().toLowerCase() === want) return true;
+  }
+  return false;
+}
+
 function resolveRequiredApprover_(rows, employeeId, employeeBaseLocation, employeeDepartment, requestLineLocation) {
   if (!rows) return { found: false };
 
   var result = resolveEmployeeCategory_(rows, employeeId, employeeDepartment);
 
   if (result.category === 'AreaHead') {
-    return { found: true, bioId: rows[0][STORE_DIR_COL_JAYRIEL_BIO], name: rows[0][STORE_DIR_COL_JAYRIEL_NAME] };
+    // Area Head requests may be approved by Jayriel OR the shared ADMIN account
+    // (the directory sheet now lists ADMIN as a second approver for Area Heads).
+    var adminBio = rows[0][STORE_DIR_COL_ADMIN_BIO];
+    var adminName = rows[0][STORE_DIR_COL_ADMIN_NAME];
+    return {
+      found: true,
+      bioId: rows[0][STORE_DIR_COL_JAYRIEL_BIO],
+      bioIds: [rows[0][STORE_DIR_COL_JAYRIEL_BIO], adminBio],
+      name: rows[0][STORE_DIR_COL_JAYRIEL_NAME] + (adminName ? ' or ' + adminName : '')
+    };
   }
   if (result.category === 'Technical') {
     return { found: true, bioId: rows[0][STORE_DIR_COL_CRIS_BIO], name: rows[0][STORE_DIR_COL_CRIS_NAME] };

@@ -415,9 +415,7 @@ function getAllRequestsForPayroll(statusFilter, approverBiometricId) {
       var lineLocation = firstLineLocationByRequestId[String(req.RequestID)] || '';
       var required = resolveRequiredApprover_(req.EmployeeID, emp.BaseLocation, emp.Department, lineLocation);
       if (required.found) {
-        var requiredBioId = String(required.bioId || '').trim().toLowerCase();
-        var approverBio = String(approverBiometricId || '').trim().toLowerCase();
-        if (requiredBioId !== approverBio) return false;
+        if (!approverMatchesRequired_(required, approverBiometricId)) return false;
       }
     }
 
@@ -678,9 +676,7 @@ function advanceOne_(requestId, targetStage, approverResult, remark, batchCtx) {
     }
     var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
     if (required.found) {
-      var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
-      var requiredBioId = String(required.bioId || '').trim().toLowerCase();
-      if (!approverBioId || approverBioId !== requiredBioId) {
+      if (!approverMatchesRequired_(required, approverResult.biometricId)) {
         return { success: false, error: 'This request must be approved by ' + required.name + '.' };
       }
     }
@@ -883,9 +879,7 @@ function authorizeLineEdit_(requestId, lineId, approverResult) {
     var lineLocation = getFirstLineBaseLocation_(requestId);
     var required = resolveRequiredApprover_(employeeId, employeeInfo.baseLocation, employeeInfo.department, lineLocation);
     if (required.found) {
-      var approverBioId = String(approverResult.biometricId || '').trim().toLowerCase();
-      var requiredBioId = String(required.bioId || '').trim().toLowerCase();
-      if (!approverBioId || approverBioId !== requiredBioId) {
+      if (!approverMatchesRequired_(required, approverResult.biometricId)) {
         return { error: 'Only ' + required.name + ' can edit line items on this request.' };
       }
     }

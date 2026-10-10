@@ -1222,3 +1222,8 @@ for the exact done/not-done breakdown, summarized here:**
     instead of 75 because the Senior Head bracket was checked before the assigned-store proximity override. Order
     is now assigned store -> Senior Head -> regional. Pushed to `main` (`6edff44`); awaiting the user's retest
     after GitHub Pages updates. If still 200: need the End OUT GPS for 2026-10-09 to check the 5km radius / sheet data.
+
+45. **ADMIN can approve Area Head requests (see CLAUDE.md item 44).** `approverMatchesRequired_` + `bioIds` in
+    `StoreDirectoryService.gs`/`common.js`; used by `RequestService.gs` and `admin.js`. Pending: the user must run
+    `clasp push -f` and `clasp deploy -i` for the backend part, and confirm the ADMIN `Approvers` row has
+    BiometricID 9999 / Role Approver.
