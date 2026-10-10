@@ -1083,6 +1083,16 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
       deployments, the service-account key (revoked in Google Cloud) and the test spreadsheet copy were all
       deleted. Don't restart it without discussing that quota.
 
+43. **Meal Allowance: assigned-store proximity now beats the Senior Head regional rate.** Reported: BIO 51077
+    (Janelyn Taglucop, also listed in the Senior Head table at MINDANAO/VISMIN 200) got 200 at Limketkai, one of
+    her assigned stores (should be 75). Cause: `maResolveRegularAllowance_` (`frontend/meal-allowance.js`)
+    checked the Senior Head bracket first, with no GPS test (item 7). New order: (1) nearest assigned store/Mother
+    Branch within its radius (5km / 1.5km, item 41), (2) Senior Head regional rate, (3) flat regional bracket.
+    Away from assigned stores she still gets 200. 100% frontend; pushed to `main` (`6edff44`). **Not verified
+    against live data** (this environment can't fetch the published Sheets CSV) and not yet confirmed by the user
+    after the push; if it still shows 200, get the End OUT lat/lon for 2026-10-09 and check radius and the sheet's
+    `BIO`/`Meal Alowance` header-keyed columns for that row.
+
 ## Security model (intentional, not an oversight)
 
 The `/exec` URL is a fully open, unauthenticated-at-the-transport-level API once deployed with "Anyone" access — anyone with the URL can call any of the `API_ACTIONS` directly (not just through the UI). `submitLiquidationRequest` has no application-level identity check at all beyond the Employee ID text match. `advanceRequestStage`, `updateLineItemAmount`, `grantSubmissionExemption`, and `revokeSubmissionExemption` are somewhat better: each requires a valid, active User ID + matching password from the `Approvers` sheet *and* that account's role matching what the action requires (`REQUIRED_ROLE_BY_STATUS`, or a hardcoded `ROLE_AUTHORIZER` check for the exemption actions) — so stolen/guessed credentials are required to act at all, and the audit trail's names are the server-resolved `FullName` rather than anything client-typed. But passwords are plain text in a Sheet, there's no rate-limiting/lockout on wrong guesses, and there's no session expiry — this is "harder to spoof by accident," not real authentication. This is a deliberate, incremental trade-off (see README), not something to silently "fix" further by adding real auth/hashing — if requirements change, that needs an explicit design conversation first.

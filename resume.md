@@ -1216,3 +1216,9 @@ for the exact done/not-done breakdown, summarized here:**
     timings yet**. Next: watch the `[timing]` lines in the Apps Script Executions log, and do a phone pass
     (11-photo submit, weak signal, refresh mid-upload, bulk approve ~10, failure paths). The three duplicate
     requests REQ#000227/204/205 (item 38) are still Pending for the user to reject in `admin.html`.
+
+
+44. **Meal Allowance priority fix (see CLAUDE.md item 43).** 51077 at an assigned store (Limketkai) showed 200
+    instead of 75 because the Senior Head bracket was checked before the assigned-store proximity override. Order
+    is now assigned store -> Senior Head -> regional. Pushed to `main` (`6edff44`); awaiting the user's retest
+    after GitHub Pages updates. If still 200: need the End OUT GPS for 2026-10-09 to check the 5km radius / sheet data.
