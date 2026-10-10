@@ -194,7 +194,8 @@ function maResolveDutyLocation_(endRec) {
 // override amount (a covered branch, not home); duty matching neither
 // falls back to the generic regional bracket.
 //
-// Checked first, ahead of both of those: the Senior Head bracket (see
+// Checked AFTER the assigned-store proximity override (being at your own
+// assigned store wins), but ahead of the flat regional bracket: the Senior Head bracket (see
 // buildSeniorHeadBracket_) — a per-person, per-region rate distinct from a
 // specific store, e.g. BIO 783 gets a different amount per broad region
 // (MINDANAO/VISMIN/NORTH LUZON/SOUTH LUZON/CAVITE AREA vs NCR AREA). No
@@ -208,14 +209,6 @@ function maResolveRegularAllowance_(endRec, regionStore) {
   var empId = String(maSelectedEmployee.EmployeeID || '').trim().toLowerCase();
   var regionAmount = Number(regionStore['REGULAR (AUDIT/TEC/STAFF)']);
   if (!isFinite(regionAmount)) regionAmount = 0;
-
-  var seniorHeadRegions = maSeniorHeadBracket && maSeniorHeadBracket[empId];
-  if (seniorHeadRegions) {
-    var region = String(regionStore['Area/Region'] || '').trim().toUpperCase();
-    if (region && seniorHeadRegions[region] !== undefined) {
-      return { amount: seniorHeadRegions[region], source: 'SeniorHeadBracket' };
-    }
-  }
 
   // Collect every qualifying assigned-store row, then take the NEAREST one —
   // not the first in sheet order — so a Mother Branch and a nearby covered
@@ -252,7 +245,20 @@ function maResolveRegularAllowance_(endRec, regionStore) {
     });
   }
 
-  return matched || { amount: regionAmount, source: 'RegularBracket' };
+  // Standing at their own assigned store (or Mother Branch) wins over any
+  // region-wide rate; only when they're away from every assigned store does
+  // the Senior Head regional rate (then the flat regional bracket) apply.
+  if (matched) return matched;
+
+  var seniorHeadRegions = maSeniorHeadBracket && maSeniorHeadBracket[empId];
+  if (seniorHeadRegions) {
+    var region = String(regionStore['Area/Region'] || '').trim().toUpperCase();
+    if (region && seniorHeadRegions[region] !== undefined) {
+      return { amount: seniorHeadRegions[region], source: 'SeniorHeadBracket' };
+    }
+  }
+
+  return { amount: regionAmount, source: 'RegularBracket' };
 }
 
 var MA_EVENING_START_HOUR = 22; // 10:00 PM
