@@ -1103,6 +1103,14 @@ cache patching) is fully deployed; see `resume.md` for the full narrative histor
     sheet needs Role `Approver`, Active, and `BiometricID` 9999 for this to work. **Backend change: needs
     `clasp push -f` + `clasp deploy -i` (not run from this session)**; frontend is live on push. Verified with
     syntax checks only, not live data.
+    - **Status (2026-10-10)**: backend NOT yet deployed. The user saw the old "Only Guardacasa, Jayriel Quinto can
+      edit line items on this request." error as ADMIN (the new text ends "... Quinto or ADMIN ..."), confirming the
+      live `/exec` still runs the old code. This cloud session has no `clasp` and no Google login (`clasp login` needs a
+      browser), and the user has no computer to run it, so the fallback is manual: paste the current
+      `StoreDirectoryService.gs` and `RequestService.gs` from GitHub `main` into the Apps Script editor, save, then
+      Deploy -> Manage deployments -> pencil -> New version -> Deploy. The `Approvers` sheet was checked: ADMIN row has
+      Role Approver, Active TRUE, BiometricID 9999. Confirm by retrying "Mark as Not included"/Approve as Admin on an
+      Area Head request.
 
 ## Security model (intentional, not an oversight)
 

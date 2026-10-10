@@ -1227,3 +1227,8 @@ for the exact done/not-done breakdown, summarized here:**
     `StoreDirectoryService.gs`/`common.js`; used by `RequestService.gs` and `admin.js`. Pending: the user must run
     `clasp push -f` and `clasp deploy -i` for the backend part, and confirm the ADMIN `Approvers` row has
     BiometricID 9999 / Role Approver.
+
+    Status update (2026-10-10): still waiting on the backend deploy for item 45. The live site still returned the old
+    "Only Guardacasa, Jayriel Quinto can edit line items" error for ADMIN. No `clasp`/login here and the user has no
+    computer, so the plan is the manual Apps Script editor paste + New version deploy (see CLAUDE.md item 44 status).
+    Also open: user's retest of the Meal Allowance fix (item 44) for BIO 51077 on 2026-10-09 after Pages updates.
